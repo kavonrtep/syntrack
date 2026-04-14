@@ -20,7 +20,7 @@ ignore = [
 
 [lint.per-file-ignores]
 "tests/**" = ["PLR2004", "S101", "PLR0915"]
-# typer's API requires Option/Argument calls in argument defaults
-"syntrack/cli.py" = ["B008"]
+# typer's Option/Argument in defaults; deferred imports keep --help snappy
+"syntrack/cli.py" = ["B008", "PLC0415"]
 # FastAPI uses Depends/Query/Body calls in argument defaults
 "syntrack/api/routes_*.py" = ["B008"]
