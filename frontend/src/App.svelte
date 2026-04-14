@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
   import { api } from './api/client'
-  import type { Genome } from './api/types'
+  import type { BlocksResponse, Genome } from './api/types'
   import {
     DEFAULT_VIEWPORT,
     panByFraction,
@@ -16,6 +17,7 @@
     drawTracks,
     totalTrackedHeight,
   } from './canvas/draw_tracks'
+  import { drawRibbons, type AdjacentPair } from './canvas/draw_ribbons'
   import { fmtBp } from './canvas/format'
 
   // ----------------------------- State -----------------------------------
@@ -30,8 +32,16 @@
 
   let containerEl = $state<HTMLDivElement | undefined>(undefined)
   let trackCanvas = $state<HTMLCanvasElement | undefined>(undefined)
+  let ribbonCanvas = $state<HTMLCanvasElement | undefined>(undefined)
   let canvasWidth = $state(800)
   let canvasHeight = $state(600)
+
+  // Per-pair block cache; keys are "g1|g2" (ordered).
+  const pairBlocks = new SvelteMap<string, BlocksResponse>()
+  const loadingPairs = new SvelteSet<string>()
+  function pairKey(g1: string, g2: string): string {
+    return `${g1}|${g2}`
+  }
 
   // ----------------------------- Drag state ------------------------------
 
@@ -61,30 +71,76 @@
     return () => ro.disconnect()
   })
 
-  // Re-draw whenever genomes / order / viewport / size changes.
-  $effect(() => {
-    if (!trackCanvas || !genomes || canvasWidth < 2 || canvasHeight < 2) return
-
+  function sizeAndContext(canvas: HTMLCanvasElement, w: number, h: number) {
     const dpr = window.devicePixelRatio || 1
-    if (trackCanvas.width !== Math.floor(canvasWidth * dpr)) {
-      trackCanvas.width = Math.floor(canvasWidth * dpr)
-    }
-    if (trackCanvas.height !== Math.floor(canvasHeight * dpr)) {
-      trackCanvas.height = Math.floor(canvasHeight * dpr)
-    }
-    trackCanvas.style.width = `${canvasWidth}px`
-    trackCanvas.style.height = `${canvasHeight}px`
-
-    const ctx = trackCanvas.getContext('2d')
-    if (!ctx) return
+    const wi = Math.floor(w * dpr)
+    const hi = Math.floor(h * dpr)
+    if (canvas.width !== wi) canvas.width = wi
+    if (canvas.height !== hi) canvas.height = hi
+    canvas.style.width = `${w}px`
+    canvas.style.height = `${h}px`
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    return ctx
+  }
 
+  let genomesInOrder = $derived.by<Genome[]>(() => {
+    if (!genomes) return []
     const byId = new Map(genomes.map((g) => [g.id, g]))
-    const genomesInOrder = order
+    return order
       .map((id) => byId.get(id))
       .filter((g): g is Genome => g !== undefined)
+  })
 
+  let adjacentPairs = $derived.by<AdjacentPair[]>(() => {
+    const out: AdjacentPair[] = []
+    for (let i = 0; i < genomesInOrder.length - 1; i++) {
+      const g1 = genomesInOrder[i]
+      const g2 = genomesInOrder[i + 1]
+      const cached = pairBlocks.get(pairKey(g1.id, g2.id))
+      out.push({
+        topIndex: i,
+        bottomIndex: i + 1,
+        g1,
+        g2,
+        blocks: cached ? cached.blocks : null,
+      })
+    }
+    return out
+  })
+
+  // Fetch blocks for any adjacent pair we haven't seen yet.
+  $effect(() => {
+    for (let i = 0; i < genomesInOrder.length - 1; i++) {
+      const g1 = genomesInOrder[i].id
+      const g2 = genomesInOrder[i + 1].id
+      const key = pairKey(g1, g2)
+      if (pairBlocks.has(key) || loadingPairs.has(key)) continue
+      loadingPairs.add(key)
+      api.blocks(g1, g2).then(
+        (resp) => pairBlocks.set(key, resp),
+        (err) => {
+          error = `Failed to load blocks for ${g1}/${g2}: ${err}`
+        },
+      ).finally(() => loadingPairs.delete(key))
+    }
+  })
+
+  // Track canvas redraws.
+  $effect(() => {
+    if (!trackCanvas || !genomes || canvasWidth < 2 || canvasHeight < 2) return
+    const ctx = sizeAndContext(trackCanvas, canvasWidth, canvasHeight)
+    if (!ctx) return
     drawTracks(ctx, genomesInOrder, viewport, canvasWidth, canvasHeight)
+  })
+
+  // Ribbon canvas redraws.
+  $effect(() => {
+    if (!ribbonCanvas || canvasWidth < 2 || canvasHeight < 2) return
+    const ctx = sizeAndContext(ribbonCanvas, canvasWidth, canvasHeight)
+    if (!ctx) return
+    drawRibbons(ctx, adjacentPairs, viewport, canvasWidth, canvasHeight)
   })
 
   // ----------------------------- Interaction -----------------------------
@@ -171,10 +227,16 @@
       onpointerup={onPointerUp}
       onpointercancel={onPointerUp}
     >
-      <canvas
-        bind:this={trackCanvas}
+      <div
+        class="canvas-stack"
         style:height={`${Math.max(canvasHeight, canvasContentHeight)}px`}
-      ></canvas>
+      >
+        <canvas bind:this={ribbonCanvas} class="layer ribbons"></canvas>
+        <canvas bind:this={trackCanvas} class="layer tracks"></canvas>
+      </div>
+      {#if loadingPairs.size > 0}
+        <div class="badge">deriving {loadingPairs.size} pair{loadingPairs.size === 1 ? '' : 's'}…</div>
+      {/if}
     </div>
   {/if}
 </main>
@@ -224,9 +286,40 @@
     touch-action: none;
   }
 
-  canvas {
-    display: block;
+  .canvas-stack {
+    position: relative;
     width: 100%;
+  }
+
+  .layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .ribbons {
+    /* drawn first; tracks on top to mask the strip behind genome bars */
+    z-index: 1;
+  }
+
+  .tracks {
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .badge {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    background: rgba(40, 40, 40, 0.85);
+    border: 1px solid #555;
+    padding: 0.3em 0.6em;
+    border-radius: 3px;
+    color: #ddd;
+    font-size: 0.8em;
+    pointer-events: none;
   }
 
   footer {
