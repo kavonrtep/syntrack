@@ -72,6 +72,8 @@ Columns (standard `-outfmt 6`, 0-indexed):
 
 **Uniqueness:** the upstream BLAST was run with `-num_alignments 1`, so each query typically has a single hit per genome, but the uniqueness filter in the loader (Section 3.2.1 of the design doc) still applies to guarantee single-copy semantics.
 
+**Filter overrides for this dataset.** The probe oligos are short (~40–47 bp), so the default `min_length=100` from `syntrack_config.example.yaml` would discard everything. Use [`example_data/syntrack_config.yaml`](syntrack_config.yaml) — it sets `min_length=30` while keeping the rest of the defaults.
+
 ### `genomes.csv` — loader index
 
 ```

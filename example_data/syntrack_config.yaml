@@ -1,0 +1,17 @@
+# SynTrack config for the pea pangenome example dataset.
+#
+# This dataset uses short painting-probe oligos (~45 bp), so the default
+# min_length=100 is wrong. We lower it to 30 and keep other defaults.
+
+data:
+  genomes_csv: ./genomes.csv
+
+blast_filtering:
+  min_pident: 95.0
+  min_length: 30          # painting probes are ~40-47 bp
+  max_evalue: 1.0e-10
+  uniqueness_ratio: 1.5
+
+block_detection:
+  max_gap: 300000
+  min_block_size: 3
