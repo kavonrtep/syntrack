@@ -10,7 +10,9 @@ When the two conflict, the design wins; the plan is updated.
 
 ## Status
 
-Planning complete. Decisions D1–D16 fixed. **v0.1 = Phases 1 + 2** (backend MVP + browse-only viewer with reorder & ribbons; no highlight, no FISH, no exports). Scaffolding is the next concrete step.
+**v0.1 shipped: Phases 1 + 2 complete.** 159 backend tests + 21 frontend tests pass; ruff/mypy/svelte-check all clean; end-to-end verified on the real pea dataset (`example_data/`). The viewer renders tracks + block ribbons + SCM-line LOD with mouse-wheel zoom, drag pan, and drag-and-drop reorder.
+
+Phases 3 (highlight + FISH) and 4 (param tuning UI, exports, precompute CLI, .npz cache) are deferred to v0.2.
 
 ## Stack (per IMPLEMENTATION_PLAN §0)
 
@@ -51,6 +53,13 @@ hermit/                   Claude Code harness config (not project code — ignor
 
 Planned (not yet created): `syntrack/` (Python package), `frontend/`, `tests/`, `data/` (user-supplied fai + blast), `data/cache/` (optional precomputed `.npz`).
 
-## Next steps
+## Next steps (v0.2)
 
-See `docs/IMPLEMENTATION_PLAN.md` §4 (Phase 1 backend) and §5 (Phase 2 frontend) for the v0.1 task list and done-criteria. Start with §4.1 scaffolding (`pyproject.toml` + `uv` venv + ruff/mypy/pytest config + typer CLI stub).
+See `docs/IMPLEMENTATION_PLAN.md` §6 (Phase 3 highlight + FISH) and §7 (Phase 4 polish, exports, precompute CLI, .npz cache, tooltips, block-param tuning UI).
+
+## Dev workflow notes
+
+- The hermit sandbox sets `PIP_TARGET=/envs/pip` and `PYTHONPATH=/envs/pip` system-wide. The `./dev.sh` wrapper neutralizes both for the project venv. Always invoke Python tools through `./dev.sh` (e.g., `./dev.sh pytest`, `./dev.sh syntrack ...`).
+- npm/Vite run normally from `frontend/` (no wrapper needed).
+- Python is at `/opt/envs/pydata/bin/python3.12`; the project venv is `.venv/`.
+- See `README.md` for the two-terminal dev loop (FastAPI on :8765, Vite on :5173 with /api proxy).
