@@ -1,0 +1,45 @@
+# SynTrack example configuration. Copy and edit for your dataset.
+
+data:
+  # Path to genomes.csv (columns: genome_id,fai,SCM[,label]). Relative paths
+  # are resolved against this config file's directory.
+  genomes_csv: ./example_data/genomes.csv
+
+# BLAST hit filtering (design §3.2.1)
+blast_filtering:
+  min_pident: 95.0
+  min_length: 100
+  max_evalue: 1.0e-10
+  uniqueness_ratio: 1.5
+
+# Collinear block detection (design §3.3 / IMPLEMENTATION_PLAN D10)
+# Defaults err on the side of small, tight blocks — blocks exist for rendering
+# data reduction at low zoom, not as biological annotations.
+block_detection:
+  max_gap: 300000
+  min_block_size: 3
+
+pair_cache:
+  max_pairs: 30
+
+server:
+  host: 127.0.0.1
+  port: 8765
+
+rendering_defaults:
+  block_threshold_bp_per_px: 50000
+  max_visible_scms: 5000
+  connection_opacity: 0.3
+  highlight_opacity: 0.8
+  dimmed_opacity: 0.05
+
+# Karyotype-agnostic palette (IMPLEMENTATION_PLAN D14)
+palette:
+  distinct_top_n: 12
+  minor_color: "#888888"
+  # palette_overrides:
+  #   JI1006_2026-01-19:
+  #     chr1: "#e6194b"
+
+# Optional friendly names for genomes (default: genome_id from genomes.csv)
+genome_labels: {}

@@ -1,0 +1,24 @@
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = [
+    "E", "F", "W",  # pycodestyle / pyflakes
+    "I",            # isort
+    "UP",           # pyupgrade
+    "B",            # bugbear
+    "SIM",          # simplify
+    "RUF",          # ruff-specific
+    "N",            # pep8-naming
+    "PL",           # pylint subset
+    "RET",          # flake8-return
+    "TID",          # tidy-imports
+]
+ignore = [
+    "PLR0913",  # too many args (algorithms have many tunables)
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["PLR2004", "S101", "PLR0915"]
+# typer's API requires Option/Argument calls in argument defaults
+"syntrack/cli.py" = ["B008"]
