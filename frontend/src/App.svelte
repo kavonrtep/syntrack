@@ -3,7 +3,7 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
   import { api } from './api/client'
-  import type { BlocksResponse, Genome } from './api/types'
+  import type { BlocksResponse, ConfigResponse, Genome, SCMsResponse } from './api/types'
   import {
     DEFAULT_VIEWPORT,
     panByFraction,
@@ -18,7 +18,9 @@
     totalTrackedHeight,
   } from './canvas/draw_tracks'
   import { drawRibbons, type AdjacentPair } from './canvas/draw_ribbons'
+  import { drawScmLines, type AdjacentPairScms } from './canvas/draw_scms'
   import { fmtBp } from './canvas/format'
+  import { lodMode } from './canvas/lod'
 
   // ----------------------------- State -----------------------------------
 
@@ -27,6 +29,7 @@
   let order = $state<string[]>([])
   let viewport = $state<Viewport>(DEFAULT_VIEWPORT)
   let error = $state<string | null>(null)
+  let config = $state<ConfigResponse | null>(null)
 
   // ----------------------------- Layout ----------------------------------
 
@@ -36,9 +39,11 @@
   let canvasWidth = $state(800)
   let canvasHeight = $state(600)
 
-  // Per-pair block cache; keys are "g1|g2" (ordered).
+  // Per-pair caches; keys are "g1|g2" (ordered).
   const pairBlocks = new SvelteMap<string, BlocksResponse>()
-  const loadingPairs = new SvelteSet<string>()
+  const loadingBlocks = new SvelteSet<string>()
+  const pairScms = new SvelteMap<string, SCMsResponse>()
+  const loadingScms = new SvelteSet<string>()
   function pairKey(g1: string, g2: string): string {
     return `${g1}|${g2}`
   }
@@ -47,14 +52,19 @@
 
   let dragState = $state<{ startX: number; startCenter: number } | null>(null)
 
+  // Genome-reorder drag.
+  let dragFromIdx = $state<number | null>(null)
+  let dragOverIdx = $state<number | null>(null)
+
   // ----------------------------- Lifecycle -------------------------------
 
   onMount(async () => {
     try {
-      const r = await api.genomes()
-      genomes = r.genomes
-      order = r.genomes.map((g) => g.id)
-      universeSize = r.scm_universe_size
+      const [genomeResp, cfgResp] = await Promise.all([api.genomes(), api.config()])
+      genomes = genomeResp.genomes
+      order = genomeResp.genomes.map((g) => g.id)
+      universeSize = genomeResp.scm_universe_size
+      config = cfgResp
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     }
@@ -93,6 +103,14 @@
       .filter((g): g is Genome => g !== undefined)
   })
 
+  // LOD: blocks at low zoom, SCM lines at high zoom. Anchor on the top genome.
+  let lodModeValue = $derived.by<'block' | 'scm'>(() => {
+    if (genomesInOrder.length === 0 || canvasWidth < 2) return 'block'
+    const ppb = pixelsPerBp(viewport, genomesInOrder[0].total_length, canvasWidth)
+    const threshold = config?.rendering_defaults.block_threshold_bp_per_px ?? 50_000
+    return lodMode(ppb, threshold)
+  })
+
   let adjacentPairs = $derived.by<AdjacentPair[]>(() => {
     const out: AdjacentPair[] = []
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
@@ -110,20 +128,55 @@
     return out
   })
 
-  // Fetch blocks for any adjacent pair we haven't seen yet.
+  let adjacentPairsScms = $derived.by<AdjacentPairScms[]>(() => {
+    const out: AdjacentPairScms[] = []
+    for (let i = 0; i < genomesInOrder.length - 1; i++) {
+      const g1 = genomesInOrder[i]
+      const g2 = genomesInOrder[i + 1]
+      const cached = pairScms.get(pairKey(g1.id, g2.id))
+      out.push({
+        topIndex: i,
+        bottomIndex: i + 1,
+        g1,
+        g2,
+        scms: cached ? cached.scms : null,
+      })
+    }
+    return out
+  })
+
+  // Fetch blocks for any adjacent pair we haven't seen yet (always — LOD-low default).
   $effect(() => {
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
       const g1 = genomesInOrder[i].id
       const g2 = genomesInOrder[i + 1].id
       const key = pairKey(g1, g2)
-      if (pairBlocks.has(key) || loadingPairs.has(key)) continue
-      loadingPairs.add(key)
+      if (pairBlocks.has(key) || loadingBlocks.has(key)) continue
+      loadingBlocks.add(key)
       api.blocks(g1, g2).then(
         (resp) => pairBlocks.set(key, resp),
         (err) => {
           error = `Failed to load blocks for ${g1}/${g2}: ${err}`
         },
-      ).finally(() => loadingPairs.delete(key))
+      ).finally(() => loadingBlocks.delete(key))
+    }
+  })
+
+  // Fetch SCMs only when LOD switches to scm mode.
+  $effect(() => {
+    if (lodModeValue !== 'scm') return
+    for (let i = 0; i < genomesInOrder.length - 1; i++) {
+      const g1 = genomesInOrder[i].id
+      const g2 = genomesInOrder[i + 1].id
+      const key = pairKey(g1, g2)
+      if (pairScms.has(key) || loadingScms.has(key)) continue
+      loadingScms.add(key)
+      api.scms(g1, g2).then(
+        (resp) => pairScms.set(key, resp),
+        (err) => {
+          error = `Failed to load SCMs for ${g1}/${g2}: ${err}`
+        },
+      ).finally(() => loadingScms.delete(key))
     }
   })
 
@@ -135,12 +188,16 @@
     drawTracks(ctx, genomesInOrder, viewport, canvasWidth, canvasHeight)
   })
 
-  // Ribbon canvas redraws.
+  // Connection canvas: ribbons (LOD-low) or SCM lines (LOD-high).
   $effect(() => {
     if (!ribbonCanvas || canvasWidth < 2 || canvasHeight < 2) return
     const ctx = sizeAndContext(ribbonCanvas, canvasWidth, canvasHeight)
     if (!ctx) return
-    drawRibbons(ctx, adjacentPairs, viewport, canvasWidth, canvasHeight)
+    if (lodModeValue === 'scm') {
+      drawScmLines(ctx, adjacentPairsScms, viewport, canvasWidth, canvasHeight)
+    } else {
+      drawRibbons(ctx, adjacentPairs, viewport, canvasWidth, canvasHeight)
+    }
   })
 
   // ----------------------------- Interaction -----------------------------
@@ -178,6 +235,46 @@
     viewport = DEFAULT_VIEWPORT
   }
 
+  // Reorder handlers (HTML5 drag/drop).
+  function onRowDragStart(e: DragEvent, idx: number) {
+    dragFromIdx = idx
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('text/plain', String(idx))
+    }
+  }
+
+  function onRowDragOver(e: DragEvent, idx: number) {
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    dragOverIdx = idx
+  }
+
+  function onRowDragLeave(idx: number) {
+    if (dragOverIdx === idx) dragOverIdx = null
+  }
+
+  function onRowDrop(e: DragEvent, toIdx: number) {
+    e.preventDefault()
+    const fromIdx = dragFromIdx
+    dragFromIdx = null
+    dragOverIdx = null
+    if (fromIdx === null || fromIdx === toIdx) return
+    const next = [...order]
+    const [moved] = next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, moved)
+    order = next
+  }
+
+  function onRowDragEnd() {
+    dragFromIdx = null
+    dragOverIdx = null
+  }
+
+  function genomeById(gid: string): Genome | undefined {
+    return genomes?.find((g) => g.id === gid)
+  }
+
   // ----------------------------- Status helpers --------------------------
 
   let statusLine = $derived.by(() => {
@@ -190,7 +287,7 @@
     const bpPerPx = ppb > 0 ? 1 / ppb : 0
     return (
       `${anchor.label}: ${fmtBp(startBp)} – ${fmtBp(endBp)}  ` +
-      `(${(bpPerPx / 1000).toFixed(1)} kb/px, zoom ${viewport.zoom.toFixed(1)}×)`
+      `(${(bpPerPx / 1000).toFixed(1)} kb/px, zoom ${viewport.zoom.toFixed(1)}×, LOD: ${lodModeValue})`
     )
   })
 
@@ -215,6 +312,30 @@
   {:else if genomes === null}
     <p class="loading">Loading genomes…</p>
   {:else}
+    <aside class="sidebar" role="list" aria-label="Genome order">
+      {#each order as gid, i (gid)}
+        {@const g = genomeById(gid)}
+        {#if g}
+          <div
+            class="genome-row"
+            class:dragging={dragFromIdx === i}
+            class:drop-target={dragOverIdx === i && dragFromIdx !== i}
+            role="listitem"
+            draggable="true"
+            ondragstart={(e) => onRowDragStart(e, i)}
+            ondragover={(e) => onRowDragOver(e, i)}
+            ondragleave={() => onRowDragLeave(i)}
+            ondrop={(e) => onRowDrop(e, i)}
+            ondragend={onRowDragEnd}
+          >
+            <span class="handle" aria-hidden="true">≡</span>
+            <span class="row-label">{g.label}</span>
+            <span class="row-meta">{g.scm_count.toLocaleString()}</span>
+          </div>
+        {/if}
+      {/each}
+    </aside>
+
     <div
       bind:this={containerEl}
       class="canvas-container"
@@ -234,8 +355,10 @@
         <canvas bind:this={ribbonCanvas} class="layer ribbons"></canvas>
         <canvas bind:this={trackCanvas} class="layer tracks"></canvas>
       </div>
-      {#if loadingPairs.size > 0}
-        <div class="badge">deriving {loadingPairs.size} pair{loadingPairs.size === 1 ? '' : 's'}…</div>
+      {#if loadingBlocks.size + loadingScms.size > 0}
+        <div class="badge">
+          loading {loadingBlocks.size + loadingScms.size} pair{loadingBlocks.size + loadingScms.size === 1 ? '' : 's'}…
+        </div>
       {/if}
     </div>
   {/if}
@@ -269,7 +392,58 @@
   main {
     flex: 1;
     overflow: hidden;
-    position: relative;
+    display: flex;
+    min-height: 0;
+  }
+
+  .sidebar {
+    flex: 0 0 220px;
+    border-right: 1px solid #333;
+    background: #1f1f1f;
+    overflow-y: auto;
+    padding: 0.4em 0;
+  }
+
+  .genome-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.4em 0.6em;
+    cursor: grab;
+    border-bottom: 1px solid #2a2a2a;
+    user-select: none;
+  }
+
+  .genome-row:hover {
+    background: #2a2a2a;
+  }
+
+  .genome-row.dragging {
+    opacity: 0.4;
+    cursor: grabbing;
+  }
+
+  .genome-row.drop-target {
+    background: #1f3a4a;
+    box-shadow: inset 0 -2px 0 #4ab2e0;
+  }
+
+  .handle {
+    color: #777;
+    font-size: 0.95em;
+  }
+
+  .row-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .row-meta {
+    color: #888;
+    font-size: 0.8em;
+    font-variant-numeric: tabular-nums;
   }
 
   .loading,
