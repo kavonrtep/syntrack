@@ -55,6 +55,7 @@ export type SyntenyBlock = {
   g2_end: number
   strand: Strand
   scm_count: number
+  reference_seq: string | null
 }
 
 export type BlocksResponse = {
@@ -73,6 +74,7 @@ export type PairwiseSCM = {
   g2_start: number
   g2_end: number
   strand: Strand
+  reference_seq: string | null
 }
 
 export type SCMsResponse = {

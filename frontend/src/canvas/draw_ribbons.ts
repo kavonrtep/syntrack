@@ -1,9 +1,10 @@
 // Block-ribbon renderer. For every adjacent pair, draws one quadrilateral per
 // block connecting the g1 sequence segment (on the top track) to the g2
-// segment (on the bottom track). Color is taken from the *target* (g2)
-// sequence's palette entry per design §5.4.
+// segment (on the bottom track). Color comes from the block's reference_seq
+// looked up in the reference genome's palette (v0.1.1 color propagation).
 
 import type { Genome, SyntenyBlock } from '../api/types'
+import { colorFor } from './colors'
 import {
   bpToPx,
   visibleRange,
@@ -39,6 +40,7 @@ export function drawRibbons(
   viewport: Viewport,
   canvasWidth: number,
   canvasHeight: number,
+  referenceColorMap: Map<string, string>,
   baseOpacity = 0.45,
   layout: TrackLayout = DEFAULT_LAYOUT,
 ): void {
@@ -51,7 +53,6 @@ export function drawRibbons(
     const yTopBottom = trackY(pair.topIndex, layout) + layout.trackHeight
     const yBottomTop = trackY(pair.bottomIndex, layout)
 
-    const seqColors = new Map(pair.g2.sequences.map((s) => [s.name, s.color]))
     const g1SeqOffset = new Map(pair.g1.sequences.map((s) => [s.name, s.offset]))
     const g2SeqOffset = new Map(pair.g2.sequences.map((s) => [s.name, s.offset]))
 
@@ -105,7 +106,7 @@ export function drawRibbons(
         canvasWidth,
       )
 
-      const color = seqColors.get(block.g2_seq) ?? '#888'
+      const color = colorFor(block.reference_seq, referenceColorMap)
       const span = (g1B - g1A + g2B - g2A) / 2
       const opacity = densityToOpacity(block.scm_count, span, baseOpacity)
 

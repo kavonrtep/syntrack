@@ -4,6 +4,7 @@
 
   import { api } from './api/client'
   import type { BlocksResponse, ConfigResponse, Genome, SCMsResponse } from './api/types'
+  import { referenceColorMap } from './canvas/colors'
   import {
     DEFAULT_VIEWPORT,
     panByFraction,
@@ -39,13 +40,14 @@
   let canvasWidth = $state(800)
   let canvasHeight = $state(600)
 
-  // Per-pair caches; keys are "g1|g2" (ordered).
+  // Per-pair caches; keys are "g1|g2|reference" so reorder (→ new reference)
+  // re-derives colors correctly.
   const pairBlocks = new SvelteMap<string, BlocksResponse>()
   const loadingBlocks = new SvelteSet<string>()
   const pairScms = new SvelteMap<string, SCMsResponse>()
   const loadingScms = new SvelteSet<string>()
-  function pairKey(g1: string, g2: string): string {
-    return `${g1}|${g2}`
+  function pairKey(g1: string, g2: string, ref: string): string {
+    return `${g1}|${g2}|${ref}`
   }
 
   // ----------------------------- Drag state ------------------------------
@@ -103,6 +105,12 @@
       .filter((g): g is Genome => g !== undefined)
   })
 
+  // The reference is always the top genome in current order (design §5.7).
+  let referenceGenome = $derived<Genome | null>(genomesInOrder[0] ?? null)
+  let refColorMap = $derived<Map<string, string>>(
+    referenceGenome ? referenceColorMap(referenceGenome) : new Map(),
+  )
+
   // LOD: blocks at low zoom, SCM lines at high zoom. Anchor on the top genome.
   let lodModeValue = $derived.by<'block' | 'scm'>(() => {
     if (genomesInOrder.length === 0 || canvasWidth < 2) return 'block'
@@ -113,10 +121,11 @@
 
   let adjacentPairs = $derived.by<AdjacentPair[]>(() => {
     const out: AdjacentPair[] = []
+    const ref = referenceGenome?.id ?? ''
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
       const g1 = genomesInOrder[i]
       const g2 = genomesInOrder[i + 1]
-      const cached = pairBlocks.get(pairKey(g1.id, g2.id))
+      const cached = pairBlocks.get(pairKey(g1.id, g2.id, ref))
       out.push({
         topIndex: i,
         bottomIndex: i + 1,
@@ -130,10 +139,11 @@
 
   let adjacentPairsScms = $derived.by<AdjacentPairScms[]>(() => {
     const out: AdjacentPairScms[] = []
+    const ref = referenceGenome?.id ?? ''
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
       const g1 = genomesInOrder[i]
       const g2 = genomesInOrder[i + 1]
-      const cached = pairScms.get(pairKey(g1.id, g2.id))
+      const cached = pairScms.get(pairKey(g1.id, g2.id, ref))
       out.push({
         topIndex: i,
         bottomIndex: i + 1,
@@ -147,13 +157,15 @@
 
   // Fetch blocks for any adjacent pair we haven't seen yet (always — LOD-low default).
   $effect(() => {
+    const ref = referenceGenome?.id
+    if (!ref) return
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
       const g1 = genomesInOrder[i].id
       const g2 = genomesInOrder[i + 1].id
-      const key = pairKey(g1, g2)
+      const key = pairKey(g1, g2, ref)
       if (pairBlocks.has(key) || loadingBlocks.has(key)) continue
       loadingBlocks.add(key)
-      api.blocks(g1, g2).then(
+      api.blocks(g1, g2, { reference: ref }).then(
         (resp) => pairBlocks.set(key, resp),
         (err) => {
           error = `Failed to load blocks for ${g1}/${g2}: ${err}`
@@ -165,13 +177,15 @@
   // Fetch SCMs only when LOD switches to scm mode.
   $effect(() => {
     if (lodModeValue !== 'scm') return
+    const ref = referenceGenome?.id
+    if (!ref) return
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
       const g1 = genomesInOrder[i].id
       const g2 = genomesInOrder[i + 1].id
-      const key = pairKey(g1, g2)
+      const key = pairKey(g1, g2, ref)
       if (pairScms.has(key) || loadingScms.has(key)) continue
       loadingScms.add(key)
-      api.scms(g1, g2).then(
+      api.scms(g1, g2, { reference: ref }).then(
         (resp) => pairScms.set(key, resp),
         (err) => {
           error = `Failed to load SCMs for ${g1}/${g2}: ${err}`
@@ -194,9 +208,9 @@
     const ctx = sizeAndContext(ribbonCanvas, canvasWidth, canvasHeight)
     if (!ctx) return
     if (lodModeValue === 'scm') {
-      drawScmLines(ctx, adjacentPairsScms, viewport, canvasWidth, canvasHeight)
+      drawScmLines(ctx, adjacentPairsScms, viewport, canvasWidth, canvasHeight, refColorMap)
     } else {
-      drawRibbons(ctx, adjacentPairs, viewport, canvasWidth, canvasHeight)
+      drawRibbons(ctx, adjacentPairs, viewport, canvasWidth, canvasHeight, refColorMap)
     }
   })
 

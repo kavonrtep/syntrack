@@ -40,6 +40,10 @@ export type RegionParams = {
   region_g2?: string
 }
 
+export type ReferenceParam = {
+  reference?: string
+}
+
 export const api = {
   genomes: (signal?: AbortSignal) =>
     request<GenomesResponse>('/genomes', {}, { signal }),
@@ -50,7 +54,7 @@ export const api = {
   blocks: (
     g1: string,
     g2: string,
-    opts: RegionParams & { min_scm?: number } = {},
+    opts: RegionParams & ReferenceParam & { min_scm?: number } = {},
     signal?: AbortSignal,
   ) =>
     request<BlocksResponse>(
@@ -62,7 +66,7 @@ export const api = {
   scms: (
     g1: string,
     g2: string,
-    opts: RegionParams & { limit?: number } = {},
+    opts: RegionParams & ReferenceParam & { limit?: number } = {},
     signal?: AbortSignal,
   ) =>
     request<SCMsResponse>(

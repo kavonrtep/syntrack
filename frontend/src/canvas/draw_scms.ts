@@ -1,6 +1,9 @@
 // SCM-line renderer for the high-zoom (LOD=scm) regime. One line per shared SCM.
+// Color comes from each SCM's reference_seq, looked up in the reference genome's
+// palette (v0.1.1 color propagation).
 
 import type { Genome, PairwiseSCM } from '../api/types'
+import { colorFor } from './colors'
 import { bpToPx, visibleRange, type Viewport } from './coords'
 import { DEFAULT_LAYOUT, type TrackLayout, trackY } from './draw_tracks'
 
@@ -18,6 +21,7 @@ export function drawScmLines(
   viewport: Viewport,
   canvasWidth: number,
   canvasHeight: number,
+  referenceColorMap: Map<string, string>,
   baseOpacity = 0.55,
   layout: TrackLayout = DEFAULT_LAYOUT,
 ): void {
@@ -29,7 +33,6 @@ export function drawScmLines(
     if (!pair.scms || pair.scms.length === 0) continue
     const yTopBottom = trackY(pair.topIndex, layout) + layout.trackHeight
     const yBottomTop = trackY(pair.bottomIndex, layout)
-    const seqColors = new Map(pair.g2.sequences.map((s) => [s.name, s.color]))
     const g1SeqOffset = new Map(pair.g1.sequences.map((s) => [s.name, s.offset]))
     const g2SeqOffset = new Map(pair.g2.sequences.map((s) => [s.name, s.offset]))
 
@@ -59,7 +62,7 @@ export function drawScmLines(
 
       const x1 = bpToPx(g1Mid, viewport, pair.g1.total_length, canvasWidth)
       const x2 = bpToPx(g2Mid, viewport, pair.g2.total_length, canvasWidth)
-      const color = seqColors.get(scm.g2_seq) ?? '#888'
+      const color = colorFor(scm.reference_seq, referenceColorMap)
       let path = buckets.get(color)
       if (!path) {
         path = new Path2D()
