@@ -127,6 +127,36 @@ class SCMResponse(_Schema):
     positions: list[SCMPositionSchema]
 
 
+# ------------------------------ /api/highlight ----------------------------
+
+
+class HighlightSourceSchema(_Schema):
+    genome_id: str
+    seq: str
+    start: int
+    end: int
+    scm_count: int
+
+
+class HighlightPositionSchema(_Schema):
+    scm_id: str
+    seq: str
+    start: int
+    end: int
+    strand: str = Field(pattern=r"^[+-]$")
+
+
+class HighlightTargetSchema(_Schema):
+    genome_id: str
+    scm_count: int
+    positions: list[HighlightPositionSchema]
+
+
+class HighlightResponse(_Schema):
+    source: HighlightSourceSchema
+    targets: list[HighlightTargetSchema]
+
+
 # ------------------------------ /api/align --------------------------------
 
 
