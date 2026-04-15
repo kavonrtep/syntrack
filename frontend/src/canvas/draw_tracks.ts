@@ -33,10 +33,12 @@ export function totalTrackedHeight(nGenomes: number, layout: TrackLayout): numbe
 
 export type GenomePaintMap = Map<string, PaintRegion[]>
 
+export type ViewportFn = (genomeId: string) => Viewport
+
 export function drawTracks(
   ctx: CanvasRenderingContext2D,
   genomesInOrder: Genome[],
-  viewport: Viewport,
+  viewportFn: ViewportFn,
   canvasWidth: number,
   canvasHeight: number,
   paintByGenome: GenomePaintMap,
@@ -49,17 +51,18 @@ export function drawTracks(
 
   for (let i = 0; i < genomesInOrder.length; i++) {
     const g = genomesInOrder[i]
+    const vp = viewportFn(g.id)
     const y = trackY(i, layout)
-    const ppb = pixelsPerBp(viewport, g.total_length, canvasWidth)
-    const { startBp, endBp } = visibleRange(viewport, g.total_length, canvasWidth)
+    const ppb = pixelsPerBp(vp, g.total_length, canvasWidth)
+    const { startBp, endBp } = visibleRange(vp, g.total_length, canvasWidth)
 
     ctx.fillStyle = '#ddd'
     ctx.fillText(g.label, 8, y - 6)
 
     const painting = paintByGenome.get(g.id)
     const drawnSeqs = painting
-      ? drawPaintedBars(ctx, g, painting, referenceColorMap, viewport, canvasWidth, y, layout, startBp, endBp)
-      : drawSeqPaletteBars(ctx, g, viewport, canvasWidth, y, layout, startBp, endBp)
+      ? drawPaintedBars(ctx, g, painting, referenceColorMap, vp, canvasWidth, y, layout, startBp, endBp)
+      : drawSeqPaletteBars(ctx, g, vp, canvasWidth, y, layout, startBp, endBp)
 
     // Sequence name labels (on top of whatever colour bars we drew)
     if (ppb > 0) {

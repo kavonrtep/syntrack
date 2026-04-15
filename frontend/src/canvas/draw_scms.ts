@@ -4,8 +4,13 @@
 
 import type { Genome, PairwiseSCM } from '../api/types'
 import { colorFor } from './colors'
-import { bpToPx, visibleRange, type Viewport } from './coords'
-import { DEFAULT_LAYOUT, type TrackLayout, trackY } from './draw_tracks'
+import { bpToPx, visibleRange } from './coords'
+import {
+  DEFAULT_LAYOUT,
+  type TrackLayout,
+  type ViewportFn,
+  trackY,
+} from './draw_tracks'
 
 export type AdjacentPairScms = {
   topIndex: number
@@ -18,7 +23,7 @@ export type AdjacentPairScms = {
 export function drawScmLines(
   ctx: CanvasRenderingContext2D,
   pairs: AdjacentPairScms[],
-  viewport: Viewport,
+  viewportFn: ViewportFn,
   canvasWidth: number,
   canvasHeight: number,
   referenceColorMap: Map<string, string>,
@@ -33,16 +38,18 @@ export function drawScmLines(
     if (!pair.scms || pair.scms.length === 0) continue
     const yTopBottom = trackY(pair.topIndex, layout) + layout.trackHeight
     const yBottomTop = trackY(pair.bottomIndex, layout)
+    const vp1 = viewportFn(pair.g1.id)
+    const vp2 = viewportFn(pair.g2.id)
     const g1SeqOffset = new Map(pair.g1.sequences.map((s) => [s.name, s.offset]))
     const g2SeqOffset = new Map(pair.g2.sequences.map((s) => [s.name, s.offset]))
 
     const { startBp: g1Start, endBp: g1End } = visibleRange(
-      viewport,
+      vp1,
       pair.g1.total_length,
       canvasWidth,
     )
     const { startBp: g2Start, endBp: g2End } = visibleRange(
-      viewport,
+      vp2,
       pair.g2.total_length,
       canvasWidth,
     )
@@ -60,8 +67,8 @@ export function drawScmLines(
       if (g1Mid < g1Start || g1Mid > g1End) continue
       if (g2Mid < g2Start || g2Mid > g2End) continue
 
-      const x1 = bpToPx(g1Mid, viewport, pair.g1.total_length, canvasWidth)
-      const x2 = bpToPx(g2Mid, viewport, pair.g2.total_length, canvasWidth)
+      const x1 = bpToPx(g1Mid, vp1, pair.g1.total_length, canvasWidth)
+      const x2 = bpToPx(g2Mid, vp2, pair.g2.total_length, canvasWidth)
       const color = colorFor(scm.reference_seq, referenceColorMap)
       let path = buckets.get(color)
       if (!path) {

@@ -27,6 +27,7 @@
   import { drawRibbons, type AdjacentPair } from './canvas/draw_ribbons'
   import { drawScmLines, type AdjacentPairScms } from './canvas/draw_scms'
   import { fmtBp } from './canvas/format'
+  import { genomeIndexAt } from './canvas/hit_test'
   import { lodMode } from './canvas/lod'
 
   // ----------------------------- State -----------------------------------
@@ -34,9 +35,17 @@
   let genomes = $state<Genome[] | null>(null)
   let universeSize = $state(0)
   let order = $state<string[]>([])
-  let viewport = $state<Viewport>(DEFAULT_VIEWPORT)
+  let globalViewport = $state<Viewport>(DEFAULT_VIEWPORT)
+  // Per-genome overrides: a genome entry here is zoomed/panned independently
+  // of the global viewport. Created via Shift + wheel / drag over a genome row.
+  const viewportOverrides = new SvelteMap<string, Viewport>()
   let error = $state<string | null>(null)
   let config = $state<ConfigResponse | null>(null)
+
+  function effectiveViewport(genomeId: string): Viewport {
+    return viewportOverrides.get(genomeId) ?? globalViewport
+  }
+  const viewportFn = (gid: string): Viewport => effectiveViewport(gid)
 
   // ----------------------------- Layout ----------------------------------
 
@@ -64,7 +73,13 @@
 
   // ----------------------------- Drag state ------------------------------
 
-  let dragState = $state<{ startX: number; startCenter: number } | null>(null)
+  // If target is null, the drag moves the global viewport; otherwise it
+  // targets a specific genome's override (Shift + drag).
+  let dragState = $state<{
+    startX: number
+    startCenter: number
+    target: string | null
+  } | null>(null)
 
   // Genome-reorder drag.
   let dragFromIdx = $state<number | null>(null)
@@ -123,10 +138,12 @@
     referenceGenome ? referenceColorMap(referenceGenome) : new Map(),
   )
 
-  // LOD: blocks at low zoom, SCM lines at high zoom. Anchor on the top genome.
+  // LOD: blocks at low zoom, SCM lines at high zoom. Anchor on the top genome's
+  // effective viewport (global, or its own override if one is set).
   let lodModeValue = $derived.by<'block' | 'scm'>(() => {
     if (genomesInOrder.length === 0 || canvasWidth < 2) return 'block'
-    const ppb = pixelsPerBp(viewport, genomesInOrder[0].total_length, canvasWidth)
+    const top = genomesInOrder[0]
+    const ppb = pixelsPerBp(effectiveViewport(top.id), top.total_length, canvasWidth)
     const threshold = config?.rendering_defaults.block_threshold_bp_per_px ?? 50_000
     return lodMode(ppb, threshold)
   })
@@ -234,15 +251,19 @@
     return map
   })
 
-  // Track canvas redraws.
+  // Track canvas redraws. Depend on viewportOverrides.size + globalViewport so
+  // any viewport change triggers a redraw.
   $effect(() => {
     if (!trackCanvas || !genomes || canvasWidth < 2 || canvasHeight < 2) return
+    // touch reactive state so overrides changes trigger this effect
+    void viewportOverrides.size
+    void globalViewport
     const ctx = sizeAndContext(trackCanvas, canvasWidth, canvasHeight)
     if (!ctx) return
     drawTracks(
       ctx,
       genomesInOrder,
-      viewport,
+      viewportFn,
       canvasWidth,
       canvasHeight,
       paintByGenome,
@@ -253,16 +274,27 @@
   // Connection canvas: ribbons (LOD-low) or SCM lines (LOD-high).
   $effect(() => {
     if (!ribbonCanvas || canvasWidth < 2 || canvasHeight < 2) return
+    void viewportOverrides.size
+    void globalViewport
     const ctx = sizeAndContext(ribbonCanvas, canvasWidth, canvasHeight)
     if (!ctx) return
     if (lodModeValue === 'scm') {
-      drawScmLines(ctx, adjacentPairsScms, viewport, canvasWidth, canvasHeight, refColorMap)
+      drawScmLines(ctx, adjacentPairsScms, viewportFn, canvasWidth, canvasHeight, refColorMap)
     } else {
-      drawRibbons(ctx, adjacentPairs, viewport, canvasWidth, canvasHeight, refColorMap)
+      drawRibbons(ctx, adjacentPairs, viewportFn, canvasWidth, canvasHeight, refColorMap)
     }
   })
 
   // ----------------------------- Interaction -----------------------------
+
+  /** Which genome is the pointer over (or null if not over a track). */
+  function pointerGenomeId(clientY: number): string | null {
+    if (!trackCanvas) return null
+    const rect = trackCanvas.getBoundingClientRect()
+    const y = clientY - rect.top
+    const idx = genomeIndexAt(y, genomesInOrder.length)
+    return idx === null ? null : genomesInOrder[idx].id
+  }
 
   function onWheel(e: WheelEvent) {
     if (!trackCanvas) return
@@ -270,12 +302,23 @@
     const rect = trackCanvas.getBoundingClientRect()
     const cursorFraction = (e.clientX - rect.left) / rect.width
     const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25
-    viewport = zoomAtFraction(viewport, cursorFraction, factor)
+
+    // Shift + wheel over a genome row → scoped zoom for that genome.
+    const scoped = e.shiftKey ? pointerGenomeId(e.clientY) : null
+    if (scoped) {
+      const current = effectiveViewport(scoped)
+      viewportOverrides.set(scoped, zoomAtFraction(current, cursorFraction, factor))
+    } else {
+      globalViewport = zoomAtFraction(globalViewport, cursorFraction, factor)
+    }
   }
 
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return
-    dragState = { startX: e.clientX, startCenter: viewport.center }
+    const scoped = e.shiftKey ? pointerGenomeId(e.clientY) : null
+    const target = scoped
+    const startCenter = target ? effectiveViewport(target).center : globalViewport.center
+    dragState = { startX: e.clientX, startCenter, target }
     ;(e.target as Element).setPointerCapture(e.pointerId)
   }
 
@@ -283,10 +326,18 @@
     if (!dragState) return
     const dx = e.clientX - dragState.startX
     const fraction = dx / canvasWidth
-    viewport = panByFraction(
-      { zoom: viewport.zoom, center: dragState.startCenter },
-      fraction,
-    )
+    if (dragState.target) {
+      const cur = effectiveViewport(dragState.target)
+      viewportOverrides.set(
+        dragState.target,
+        panByFraction({ zoom: cur.zoom, center: dragState.startCenter }, fraction),
+      )
+    } else {
+      globalViewport = panByFraction(
+        { zoom: globalViewport.zoom, center: dragState.startCenter },
+        fraction,
+      )
+    }
   }
 
   function onPointerUp(_e: PointerEvent) {
@@ -294,7 +345,8 @@
   }
 
   function resetView() {
-    viewport = DEFAULT_VIEWPORT
+    globalViewport = DEFAULT_VIEWPORT
+    viewportOverrides.clear()
   }
 
   // Reorder handlers (HTML5 drag/drop).
@@ -341,15 +393,18 @@
 
   let statusLine = $derived.by(() => {
     if (!genomes || genomes.length === 0) return ''
-    // Use the first ordered genome as the anchor for status display
     const byId = new Map(genomes.map((g) => [g.id, g]))
     const anchor = byId.get(order[0]) ?? genomes[0]
-    const { startBp, endBp } = visibleRange(viewport, anchor.total_length, canvasWidth)
-    const ppb = pixelsPerBp(viewport, anchor.total_length, canvasWidth)
+    const vp = effectiveViewport(anchor.id)
+    const { startBp, endBp } = visibleRange(vp, anchor.total_length, canvasWidth)
+    const ppb = pixelsPerBp(vp, anchor.total_length, canvasWidth)
     const bpPerPx = ppb > 0 ? 1 / ppb : 0
+    const scope = viewportOverrides.size
+      ? `${viewportOverrides.size} override${viewportOverrides.size === 1 ? '' : 's'}`
+      : 'global'
     return (
       `${anchor.label}: ${fmtBp(startBp)} – ${fmtBp(endBp)}  ` +
-      `(${(bpPerPx / 1000).toFixed(1)} kb/px, zoom ${viewport.zoom.toFixed(1)}×, LOD: ${lodModeValue})`
+      `(${(bpPerPx / 1000).toFixed(1)} kb/px, zoom ${vp.zoom.toFixed(1)}×, LOD: ${lodModeValue}, ${scope})`
     )
   })
 
@@ -365,6 +420,7 @@
       >{genomes.length} genomes · {universeSize.toLocaleString()} SCMs</span
     >
   {/if}
+  <span class="hint" title="Hold Shift while wheel-zooming or dragging over a genome row to scope the action to that genome.">Shift = scope to one genome</span>
   <button onclick={resetView} disabled={!genomes}>Reset view</button>
 </header>
 
@@ -450,6 +506,13 @@
   .meta {
     color: #888;
     font-size: 0.9em;
+  }
+
+  .hint {
+    color: #666;
+    font-size: 0.8em;
+    margin-left: auto;
+    cursor: help;
   }
 
   main {

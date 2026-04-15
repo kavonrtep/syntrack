@@ -5,12 +5,13 @@
 
 import type { Genome, SyntenyBlock } from '../api/types'
 import { colorFor } from './colors'
+import { bpToPx, visibleRange } from './coords'
 import {
-  bpToPx,
-  visibleRange,
-  type Viewport,
-} from './coords'
-import { DEFAULT_LAYOUT, type TrackLayout, trackY } from './draw_tracks'
+  DEFAULT_LAYOUT,
+  type TrackLayout,
+  type ViewportFn,
+  trackY,
+} from './draw_tracks'
 
 export type AdjacentPair = {
   topIndex: number
@@ -37,7 +38,7 @@ function densityToOpacity(scmCount: number, spanBp: number, baseOpacity: number)
 export function drawRibbons(
   ctx: CanvasRenderingContext2D,
   pairs: AdjacentPair[],
-  viewport: Viewport,
+  viewportFn: ViewportFn,
   canvasWidth: number,
   canvasHeight: number,
   referenceColorMap: Map<string, string>,
@@ -53,16 +54,19 @@ export function drawRibbons(
     const yTopBottom = trackY(pair.topIndex, layout) + layout.trackHeight
     const yBottomTop = trackY(pair.bottomIndex, layout)
 
+    const vp1 = viewportFn(pair.g1.id)
+    const vp2 = viewportFn(pair.g2.id)
+
     const g1SeqOffset = new Map(pair.g1.sequences.map((s) => [s.name, s.offset]))
     const g2SeqOffset = new Map(pair.g2.sequences.map((s) => [s.name, s.offset]))
 
     const { startBp: g1Start, endBp: g1End } = visibleRange(
-      viewport,
+      vp1,
       pair.g1.total_length,
       canvasWidth,
     )
     const { startBp: g2Start, endBp: g2End } = visibleRange(
-      viewport,
+      vp2,
       pair.g2.total_length,
       canvasWidth,
     )
@@ -81,30 +85,10 @@ export function drawRibbons(
       if (g1B < g1Start || g1A > g1End) continue
       if (g2B < g2Start || g2A > g2End) continue
 
-      const x1a = bpToPx(
-        clipBp(g1A, g1Start, g1End),
-        viewport,
-        pair.g1.total_length,
-        canvasWidth,
-      )
-      const x1b = bpToPx(
-        clipBp(g1B, g1Start, g1End),
-        viewport,
-        pair.g1.total_length,
-        canvasWidth,
-      )
-      const x2a = bpToPx(
-        clipBp(g2A, g2Start, g2End),
-        viewport,
-        pair.g2.total_length,
-        canvasWidth,
-      )
-      const x2b = bpToPx(
-        clipBp(g2B, g2Start, g2End),
-        viewport,
-        pair.g2.total_length,
-        canvasWidth,
-      )
+      const x1a = bpToPx(clipBp(g1A, g1Start, g1End), vp1, pair.g1.total_length, canvasWidth)
+      const x1b = bpToPx(clipBp(g1B, g1Start, g1End), vp1, pair.g1.total_length, canvasWidth)
+      const x2a = bpToPx(clipBp(g2A, g2Start, g2End), vp2, pair.g2.total_length, canvasWidth)
+      const x2b = bpToPx(clipBp(g2B, g2Start, g2End), vp2, pair.g2.total_length, canvasWidth)
 
       const color = colorFor(block.reference_seq, referenceColorMap)
       const span = (g1B - g1A + g2B - g2A) / 2
