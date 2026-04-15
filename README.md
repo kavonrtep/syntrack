@@ -10,22 +10,50 @@ Genome synteny visualization tool. Multi-genome view with adjacent-pair connecti
 
 **v0.1 = Phases 1 + 2 complete.** Browse-only viewer with reorder, block ribbons, and SCM-line LOD switch. No highlight, FISH, or exports yet (deferred to v0.2 per IMPLEMENTATION_PLAN D16).
 
+## Prerequisites
+
+- Python ≥ 3.12 (any patch version of 3.12 / 3.13 / 3.14 works)
+- Node.js ≥ 18 + npm
+- `uv` (recommended) — [install options](https://docs.astral.sh/uv/getting-started/installation/)
+
+`./dev.sh` is a small wrapper used throughout the docs; it runs commands inside the project venv and unsets `PIP_TARGET` / `PYTHONPATH` if they happen to be set (they are, inside this repo's hermit sandbox — harmless no-op on a normal Linux box).
+
 ## Quickstart (development)
 
-This repo's environment has `PIP_TARGET=/envs/pip` and `PYTHONPATH=/envs/pip` set by the hermit sandbox. The `dev.sh` wrapper neutralizes them so the project venv works correctly.
+### 1. Backend venv — pick one path
 
-### One-time setup
+**(A) With uv (recommended).** uv can install the Python interpreter for you, so nothing is required beyond `uv` itself:
 
 ```bash
-# Backend venv
+uv python install 3.12       # skip if you already have a usable 3.12+ interpreter
+uv venv --python 3.12        # creates ./.venv
+./dev.sh uv pip install -e ".[dev]"
+```
+
+**(B) Without uv, using whatever Python 3.12+ is on your PATH.** Replace `python3.12` with `python3.13` / `python3.14` / `python3` as available (anything ≥ 3.12):
+
+```bash
+python3.12 -m venv .venv
+./dev.sh python -m pip install -e ".[dev]"
+```
+
+**(C) Hermit sandbox specific** (this repo's development environment — only needed if you cloned into the same sandbox): Python 3.12 lives at `/opt/envs/pydata/bin/python3.12`, and a one-time `uv` bootstrap is required because pip writes to `$PIP_TARGET` by default:
+
+```bash
 /opt/envs/pydata/bin/python3.12 -m venv .venv
 PIP_TARGET= PYTHONPATH= .venv/bin/python -m pip install --force-reinstall uv
 ./dev.sh uv pip install -e ".[dev]"
+```
 
-# Frontend dependencies
+### 2. Frontend dependencies
+
+```bash
 cd frontend && npm install && cd ..
+```
 
-# Test data symlinks (one-time, refresh when source data changes)
+### 3. Test-data symlinks (one-time, refresh when source data changes)
+
+```bash
 ./example_data/link_data.sh
 ```
 
