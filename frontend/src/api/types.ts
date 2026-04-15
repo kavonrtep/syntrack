@@ -125,6 +125,31 @@ export type AlignmentResponse = {
   mappings: AlignmentMapping[]
 }
 
+export type HighlightPosition = {
+  scm_id: string
+  seq: string
+  start: number
+  end: number
+  strand: Strand
+}
+
+export type HighlightTarget = {
+  genome_id: string
+  scm_count: number
+  positions: HighlightPosition[]
+}
+
+export type HighlightResponse = {
+  source: {
+    genome_id: string
+    seq: string
+    start: number
+    end: number
+    scm_count: number
+  }
+  targets: HighlightTarget[]
+}
+
 export type BlockDetection = { max_gap: number; min_block_size: number }
 export type BlastFiltering = {
   min_pident: number

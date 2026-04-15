@@ -7,6 +7,7 @@
     BlocksResponse,
     ConfigResponse,
     Genome,
+    HighlightResponse,
     PaintRegion,
     SCMsResponse,
   } from './api/types'
@@ -27,6 +28,11 @@
     totalTrackedHeight,
     trackY,
   } from './canvas/draw_tracks'
+  import {
+    drawHighlight,
+    type HighlightOverlay,
+    type HighlightSource,
+  } from './canvas/draw_highlight'
   import { drawRibbons, type AdjacentPair } from './canvas/draw_ribbons'
   import { drawScmLines, type AdjacentPairScms } from './canvas/draw_scms'
   import { fmtBp } from './canvas/format'
@@ -64,6 +70,7 @@
   let containerEl = $state<HTMLDivElement | undefined>(undefined)
   let trackCanvas = $state<HTMLCanvasElement | undefined>(undefined)
   let ribbonCanvas = $state<HTMLCanvasElement | undefined>(undefined)
+  let overlayCanvas = $state<HTMLCanvasElement | undefined>(undefined)
   let canvasWidth = $state(800)
   let canvasHeight = $state(600)
 
@@ -94,6 +101,11 @@
   // Track-handle reorder drag (HTML5 DnD on the DOM handle overlay).
   let reorderFromIdx = $state<number | null>(null)
   let reorderOverIdx = $state<number | null>(null)
+
+  // Highlight region selection (Ctrl / Meta + click-drag).
+  let highlightSelection = $state<HighlightSource | null>(null)
+  let highlightResult = $state<HighlightResponse | null>(null)
+  let highlightDragging = $state(false)
 
   // ----------------------------- Lifecycle -------------------------------
 
@@ -285,6 +297,20 @@
     }
   })
 
+  $effect(() => {
+    if (!overlayCanvas || canvasWidth < 2 || canvasHeight < 2) return
+    void viewportOverrides.size
+    void globalViewport
+    const ctx = sizeAndContext(overlayCanvas, canvasWidth, canvasHeight)
+    if (!ctx) return
+    const overlay: HighlightOverlay = {
+      source: highlightSelection,
+      isSelecting: highlightDragging,
+      result: highlightResult,
+    }
+    drawHighlight(ctx, overlay, genomesInOrder, viewportFn, canvasWidth, canvasHeight)
+  })
+
   // ----------------------------- Visibility (sidebar) --------------------
 
   function isVisible(id: string): boolean {
@@ -337,8 +363,63 @@
     }
   }
 
+  /** Resolve the clicked (genome, seq, local bp, xCanvas) or null if the
+   *  cursor isn't over any track. */
+  function resolveTrackClick(
+    clientX: number,
+    clientY: number,
+  ): {
+    genomeIdx: number
+    genome: Genome
+    seq: string
+    bpLocal: number
+    xCanvas: number
+  } | null {
+    if (!trackCanvas) return null
+    const rect = trackCanvas.getBoundingClientRect()
+    const x = clientX - rect.left
+    const y = clientY - rect.top
+    const idx = genomeIndexAt(y, genomesInOrder.length)
+    if (idx === null) return null
+    const g = genomesInOrder[idx]
+    const vp = effectiveViewport(g.id)
+    const bpGlobal = pxToBp(x, vp, g.total_length, canvasWidth)
+    const clamped = Math.max(0, Math.min(g.total_length - 1, bpGlobal))
+    let clickedSeq = g.sequences[g.sequences.length - 1]
+    for (const s of g.sequences) {
+      if (clamped >= s.offset && clamped < s.offset + s.length) {
+        clickedSeq = s
+        break
+      }
+    }
+    return {
+      genomeIdx: idx,
+      genome: g,
+      seq: clickedSeq.name,
+      bpLocal: Math.max(0, Math.round(clamped - clickedSeq.offset)),
+      xCanvas: x,
+    }
+  }
+
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return
+    // Ctrl / Meta + click-drag → start a highlight region selection.
+    if (e.ctrlKey || e.metaKey) {
+      const click = resolveTrackClick(e.clientX, e.clientY)
+      if (!click) return
+      e.preventDefault()
+      ;(e.target as Element).setPointerCapture(e.pointerId)
+      highlightSelection = {
+        genomeIdx: click.genomeIdx,
+        genome: click.genome,
+        seq: click.seq,
+        startBp: click.bpLocal,
+        endBp: click.bpLocal,
+      }
+      highlightResult = null
+      highlightDragging = true
+      return
+    }
     const scoped = e.shiftKey ? pointerGenomeId(e.clientY) : null
     const target = scoped
     const startCenter = target ? effectiveViewport(target).center : globalViewport.center
@@ -366,7 +447,41 @@
     }
   }
 
+  function applyHighlightDragFromPointer(clientX: number, clientY: number): void {
+    if (!highlightSelection || !trackCanvas) return
+    const rect = trackCanvas.getBoundingClientRect()
+    const x = clientX - rect.left
+    // Y is irrelevant for the highlight region: we stay on the genome that
+    // was anchored at pointerdown, but we need its viewport to translate X
+    // back to bp on the clicked sequence.
+    void clientY
+    const g = highlightSelection.genome
+    const vp = effectiveViewport(g.id)
+    const bpGlobal = pxToBp(x, vp, g.total_length, canvasWidth)
+    const seqObj = g.sequences.find((s) => s.name === highlightSelection!.seq)
+    if (!seqObj) return
+    let bpLocal = bpGlobal - seqObj.offset
+    if (bpLocal < 0) bpLocal = 0
+    if (bpLocal > seqObj.length) bpLocal = seqObj.length
+    highlightSelection = {
+      ...highlightSelection,
+      endBp: Math.round(bpLocal),
+    }
+  }
+
   function onPointerMove(e: PointerEvent) {
+    if (highlightSelection && highlightDragging) {
+      pendingPointer = { clientX: e.clientX }
+      if (pendingFrame !== null) return
+      const clientY = e.clientY
+      pendingFrame = requestAnimationFrame(() => {
+        pendingFrame = null
+        const pending = pendingPointer
+        pendingPointer = null
+        if (pending) applyHighlightDragFromPointer(pending.clientX, clientY)
+      })
+      return
+    }
     if (!dragState) return
     pendingPointer = { clientX: e.clientX }
     if (pendingFrame !== null) return
@@ -378,10 +493,41 @@
     })
   }
 
+  async function finalizeHighlight(): Promise<void> {
+    if (!highlightSelection) return
+    highlightDragging = false
+    const sel = highlightSelection
+    const lo = Math.min(sel.startBp, sel.endBp)
+    const hi = Math.max(sel.startBp, sel.endBp)
+    if (hi <= lo) {
+      // degenerate selection — treat as a single bp region
+      highlightSelection = { ...sel, startBp: lo, endBp: Math.max(lo + 1, hi) }
+    }
+    const loFinal = Math.min(highlightSelection.startBp, highlightSelection.endBp)
+    const hiFinal = Math.max(highlightSelection.startBp, highlightSelection.endBp)
+    try {
+      const resp = await api.highlight(
+        sel.genome.id,
+        `${sel.seq}:${loFinal}-${Math.max(loFinal + 1, hiFinal)}`,
+      )
+      highlightResult = resp
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+    }
+  }
+
   function onPointerUp(_e: PointerEvent) {
     if (pendingFrame !== null) {
       cancelAnimationFrame(pendingFrame)
       pendingFrame = null
+    }
+    if (highlightSelection && highlightDragging) {
+      if (pendingPointer) {
+        applyHighlightDragFromPointer(pendingPointer.clientX, 0)
+        pendingPointer = null
+      }
+      void finalizeHighlight()
+      return
     }
     if (pendingPointer) {
       applyDragFromPointer(pendingPointer.clientX)
@@ -390,9 +536,22 @@
     dragState = null
   }
 
+  function clearHighlight(): void {
+    highlightSelection = null
+    highlightResult = null
+    highlightDragging = false
+  }
+
+  function onKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'Escape' && (highlightSelection || highlightResult)) {
+      clearHighlight()
+    }
+  }
+
   function resetView() {
     globalViewport = DEFAULT_VIEWPORT
     viewportOverrides.clear()
+    clearHighlight()
   }
 
   let lastAlignmentSummary = $state<string | null>(null)
@@ -513,7 +672,14 @@
     const base =
       `${anchor.label}: ${fmtBp(startBp)} – ${fmtBp(endBp)}  ` +
       `(${(bpPerPx / 1000).toFixed(1)} kb/px, zoom ${vp.zoom.toFixed(1)}×, LOD: ${lodModeValue}, ${scope})`
-    return lastAlignmentSummary ? `${base}  ·  ${lastAlignmentSummary}` : base
+    let line = base
+    if (lastAlignmentSummary) line += `  ·  ${lastAlignmentSummary}`
+    if (highlightResult) {
+      const src = highlightResult.source
+      const totalMatches = highlightResult.targets.reduce((s, t) => s + t.scm_count, 0)
+      line += `  ·  highlight ${src.seq}:${src.start.toLocaleString()}-${src.end.toLocaleString()} — ${src.scm_count} source SCMs, ${totalMatches} cross-genome (Esc to clear)`
+    }
+    return line
   })
 
   let canvasContentHeight = $derived(
@@ -525,6 +691,8 @@
   const HANDLE_HEIGHT = 18 // DOM overlay strip sitting above each bar
 </script>
 
+<svelte:window onkeydown={onKeyDown} />
+
 <header>
   <h1>SynTrack</h1>
   {#if allGenomes}
@@ -534,9 +702,9 @@
   {/if}
   <span
     class="hint"
-    title="Drag the label above any track to reorder genomes. Shift + wheel/drag over a bar: scope that genome. Double-click a bar: vertical alignment."
+    title="Drag the label above any track to reorder. Shift + wheel/drag over a bar: scope that genome. Double-click a bar: vertical alignment. Ctrl / Cmd + click-drag on a bar: highlight a region (Esc to clear)."
   >
-    drag label = reorder · Shift = scope · dbl-click = align
+    label = reorder · Shift = scope · dbl-click = align · Ctrl-drag = highlight
   </span>
   <button onclick={resetView} disabled={!allGenomes}>Reset view</button>
 </header>
@@ -587,6 +755,7 @@
       >
         <canvas bind:this={ribbonCanvas} class="layer ribbons"></canvas>
         <canvas bind:this={trackCanvas} class="layer tracks"></canvas>
+        <canvas bind:this={overlayCanvas} class="layer overlay"></canvas>
 
         <!-- Track-handle overlay: one drag-handle strip per visible genome,
              sitting directly above its bar. Pointer-events isolated to the
@@ -776,11 +945,16 @@
     pointer-events: none;
   }
 
+  .overlay {
+    z-index: 3;
+    pointer-events: none;
+  }
+
   .handles-layer {
     position: absolute;
     inset: 0;
     pointer-events: none;
-    z-index: 3;
+    z-index: 4;
   }
 
   .track-handle {

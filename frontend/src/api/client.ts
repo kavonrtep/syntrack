@@ -5,6 +5,7 @@ import type {
   BlocksResponse,
   ConfigResponse,
   GenomesResponse,
+  HighlightResponse,
   PairsResponse,
   PaintResponse,
   SCMResponse,
@@ -93,6 +94,13 @@ export const api = {
     request<AlignmentResponse>(
       '/align',
       { genome_id: genomeId, seq, pos, ...opts },
+      { signal },
+    ),
+
+  highlight: (genomeId: string, region: string, signal?: AbortSignal) =>
+    request<HighlightResponse>(
+      '/highlight',
+      { genome_id: genomeId, region },
       { signal },
     ),
 
