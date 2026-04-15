@@ -36,14 +36,22 @@
   let universeSize = $state(0)
   let order = $state<string[]>([])
   let globalViewport = $state<Viewport>(DEFAULT_VIEWPORT)
-  // Per-genome overrides: a genome entry here is zoomed/panned independently
-  // of the global viewport. Created via Shift + wheel / drag over a genome row.
-  const viewportOverrides = new SvelteMap<string, Viewport>()
+  // Per-genome *deltas* applied on top of globalViewport. A genome's effective
+  // viewport is {global.zoom * zoomFactor, global.center + centerDelta}. Global
+  // changes propagate to every genome (including ones with overrides), which
+  // fixes the bug where a scoped genome was frozen out of global zoom/drag.
+  type ScopeDelta = { zoomFactor: number; centerDelta: number }
+  const viewportOverrides = new SvelteMap<string, ScopeDelta>()
   let error = $state<string | null>(null)
   let config = $state<ConfigResponse | null>(null)
 
   function effectiveViewport(genomeId: string): Viewport {
-    return viewportOverrides.get(genomeId) ?? globalViewport
+    const od = viewportOverrides.get(genomeId)
+    if (!od) return globalViewport
+    return {
+      zoom: Math.max(1, globalViewport.zoom * od.zoomFactor),
+      center: Math.min(1, Math.max(0, globalViewport.center + od.centerDelta)),
+    }
   }
   const viewportFn = (gid: string): Viewport => effectiveViewport(gid)
 
@@ -313,7 +321,13 @@
     const scoped = e.shiftKey ? pointerGenomeId(e.clientY) : null
     if (scoped) {
       const current = effectiveViewport(scoped)
-      viewportOverrides.set(scoped, zoomAtFraction(current, cursorFraction, factor))
+      const next = zoomAtFraction(current, cursorFraction, factor)
+      // Derive the new delta so this override stays consistent with whatever
+      // the global viewport is right now.
+      viewportOverrides.set(scoped, {
+        zoomFactor: next.zoom / globalViewport.zoom,
+        centerDelta: next.center - globalViewport.center,
+      })
     } else {
       globalViewport = zoomAtFraction(globalViewport, cursorFraction, factor)
     }
@@ -333,11 +347,15 @@
     const dx = clientX - dragState.startX
     const fraction = dx / canvasWidth
     if (dragState.target) {
+      // Pan at the current effective zoom of the target; translate the new
+      // effective center back into a delta from the (possibly moving) global.
       const cur = effectiveViewport(dragState.target)
-      viewportOverrides.set(
-        dragState.target,
-        panByFraction({ zoom: cur.zoom, center: dragState.startCenter }, fraction),
-      )
+      const next = panByFraction({ zoom: cur.zoom, center: dragState.startCenter }, fraction)
+      const prev = viewportOverrides.get(dragState.target)
+      viewportOverrides.set(dragState.target, {
+        zoomFactor: prev ? prev.zoomFactor : 1,
+        centerDelta: next.center - globalViewport.center,
+      })
     } else {
       globalViewport = panByFraction(
         { zoom: globalViewport.zoom, center: dragState.startCenter },
