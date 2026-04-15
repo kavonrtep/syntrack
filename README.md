@@ -28,7 +28,7 @@ Genome synteny visualization tool. Multi-genome view with adjacent-pair connecti
 
 This creates `.venv-hermit/` using the in-sandbox Python 3.12 (`/opt/envs/pydata/bin/python3.12`), bootstraps `uv` inside it, and installs the project in editable mode with dev deps. All subsequent commands in the docs go through `./dev.sh <command>`, which also unsets `PIP_TARGET` / `PYTHONPATH` so the hermit env vars don't leak into the venv.
 
-> **Note.** The hermit-sandbox venv is named `.venv-hermit` so it doesn't collide with a plain `.venv` your outside-sandbox tooling (IDE, host-side `uv`) may maintain. The two can't share a venv because each context resolves Python on a different path. Both names are gitignored.
+> **Note.** The hermit-sandbox venv is named `.venv-hermit` so it doesn't collide with a plain `.venv` your outside-sandbox tooling (IDE, host-side `uv`) may maintain. The two can't share a venv because each context resolves Python on a different path. Both names are gitignored. `./dev.sh <cmd>` picks `.venv-hermit` when its interpreter is actually executable (i.e. you're inside hermit), and transparently falls back to `.venv` otherwise — so the same command works in both contexts.
 
 **On a non-hermit Linux box with uv:**
 
