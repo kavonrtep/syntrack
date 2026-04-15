@@ -1,6 +1,7 @@
 // Typed wrappers around the SynTrack REST API. All endpoints share /api prefix.
 
 import type {
+  AlignmentResponse,
   BlocksResponse,
   ConfigResponse,
   GenomesResponse,
@@ -81,6 +82,19 @@ export const api = {
 
   paint: (genomeId: string, reference: string, signal?: AbortSignal) =>
     request<PaintResponse>('/paint', { genome_id: genomeId, reference }, { signal }),
+
+  align: (
+    genomeId: string,
+    seq: string,
+    pos: number,
+    opts: { k?: number } = {},
+    signal?: AbortSignal,
+  ) =>
+    request<AlignmentResponse>(
+      '/align',
+      { genome_id: genomeId, seq, pos, ...opts },
+      { signal },
+    ),
 
   config: (signal?: AbortSignal) =>
     request<ConfigResponse>('/config', {}, { signal }),

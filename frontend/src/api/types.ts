@@ -113,6 +113,18 @@ export type PaintResponse = {
   regions: PaintRegion[]
 }
 
+export type AlignmentMapping = {
+  genome_id: string
+  seq: string | null
+  pos: number | null
+  confidence: number
+}
+
+export type AlignmentResponse = {
+  source: { genome_id: string; seq: string; pos: number }
+  mappings: AlignmentMapping[]
+}
+
 export type BlockDetection = { max_gap: number; min_block_size: number }
 export type BlastFiltering = {
   min_pident: number

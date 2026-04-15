@@ -10,11 +10,13 @@
     PaintRegion,
     SCMsResponse,
   } from './api/types'
+  import { alignmentDelta } from './canvas/alignment'
   import { referenceColorMap } from './canvas/colors'
   import {
     DEFAULT_VIEWPORT,
     panByFraction,
     pixelsPerBp,
+    pxToBp,
     visibleRange,
     zoomAtFraction,
     type Viewport,
@@ -394,6 +396,75 @@
     viewportOverrides.clear()
   }
 
+  // Double-click alignment: anchor genome stays fixed; every other genome's
+  // override is rewritten so its syntenic bp lands at the same pixel as the
+  // clicked one, at the anchor's basewise resolution.
+  let lastAlignmentSummary = $state<string | null>(null)
+
+  async function onDoubleClick(e: MouseEvent) {
+    if (!trackCanvas) return
+    const rect = trackCanvas.getBoundingClientRect()
+    const cx = e.clientX - rect.left
+    const cy = e.clientY - rect.top
+    const idx = genomeIndexAt(cy, genomesInOrder.length)
+    if (idx === null) return
+    e.preventDefault()
+
+    const anchor = genomesInOrder[idx]
+    const anchorVp = effectiveViewport(anchor.id)
+    const bpGlobal = pxToBp(cx, anchorVp, anchor.total_length, canvasWidth)
+    const clamped = Math.max(0, Math.min(anchor.total_length - 1, bpGlobal))
+    // Find which sequence contains the clamped bp.
+    let clickedSeq = anchor.sequences[anchor.sequences.length - 1]
+    for (const s of anchor.sequences) {
+      if (clamped >= s.offset && clamped < s.offset + s.length) {
+        clickedSeq = s
+        break
+      }
+    }
+    const posLocal = Math.max(0, Math.round(clamped - clickedSeq.offset))
+
+    let resp
+    try {
+      resp = await api.align(anchor.id, clickedSeq.name, posLocal)
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+      return
+    }
+
+    let aligned = 0
+    let missed = 0
+    for (const m of resp.mappings) {
+      const target = genomesInOrder.find((g) => g.id === m.genome_id)
+      if (!target || m.seq === null || m.pos === null) {
+        missed += 1
+        continue
+      }
+      const targetSeq = target.sequences.find((s) => s.name === m.seq)
+      if (!targetSeq) {
+        missed += 1
+        continue
+      }
+      const bpTarget = targetSeq.offset + m.pos
+      const delta = alignmentDelta({
+        anchorVp,
+        anchorTotalLen: anchor.total_length,
+        targetTotalLen: target.total_length,
+        canvasWidth,
+        bpTarget,
+        xClick: cx,
+        globalVp: globalViewport,
+      })
+      viewportOverrides.set(m.genome_id, delta)
+      aligned += 1
+    }
+
+    const total = aligned + missed
+    lastAlignmentSummary =
+      `aligned to ${anchor.label} ${clickedSeq.name}:${posLocal.toLocaleString()}` +
+      (missed > 0 ? ` (${aligned}/${total} genomes)` : '')
+  }
+
   // Reorder handlers (HTML5 drag/drop).
   function onRowDragStart(e: DragEvent, idx: number) {
     dragFromIdx = idx
@@ -447,10 +518,10 @@
     const scope = viewportOverrides.size
       ? `${viewportOverrides.size} override${viewportOverrides.size === 1 ? '' : 's'}`
       : 'global'
-    return (
+    const base =
       `${anchor.label}: ${fmtBp(startBp)} – ${fmtBp(endBp)}  ` +
       `(${(bpPerPx / 1000).toFixed(1)} kb/px, zoom ${vp.zoom.toFixed(1)}×, LOD: ${lodModeValue}, ${scope})`
-    )
+    return lastAlignmentSummary ? `${base}  ·  ${lastAlignmentSummary}` : base
   })
 
   let canvasContentHeight = $derived(
@@ -465,7 +536,7 @@
       >{genomes.length} genomes · {universeSize.toLocaleString()} SCMs</span
     >
   {/if}
-  <span class="hint" title="Hold Shift while wheel-zooming or dragging over a genome row to scope the action to that genome.">Shift = scope to one genome</span>
+  <span class="hint" title="Shift + wheel/drag over a genome row: scope the action to that genome. Double-click on any track to vertically align the other genomes to the clicked region.">Shift = scope · dbl-click = align</span>
   <button onclick={resetView} disabled={!genomes}>Reset view</button>
 </header>
 
@@ -510,6 +581,7 @@
       onpointermove={onPointerMove}
       onpointerup={onPointerUp}
       onpointercancel={onPointerUp}
+      ondblclick={onDoubleClick}
     >
       <div
         class="canvas-stack"
