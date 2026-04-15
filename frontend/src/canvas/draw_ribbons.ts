@@ -31,6 +31,15 @@ function clipBp(bp: number, lo: number, hi: number): number {
   return bp
 }
 
+/** Clamp an [a, b] interval to a minimum width, centered on its midpoint. */
+function clampMinWidth(a: number, b: number, minWidth = 1): [number, number] {
+  const w = b - a
+  if (w >= minWidth) return [a, b]
+  const mid = (a + b) / 2
+  const half = minWidth / 2
+  return [mid - half, mid + half]
+}
+
 // Quantize per-block opacity into 4 buckets so we still issue only
 // O(colors * 4) fills. Values chosen to read on a dark background
 // across a wide density range.
@@ -98,13 +107,19 @@ export function drawRibbons(
       if (g1B < g1Start || g1A > g1End) continue
       if (g2B < g2Start || g2A > g2End) continue
 
-      const x1a = bpToPx(clipBp(g1A, g1Start, g1End), vp1, pair.g1.total_length, canvasWidth)
-      const x1b = bpToPx(clipBp(g1B, g1Start, g1End), vp1, pair.g1.total_length, canvasWidth)
-      const x2a = bpToPx(clipBp(g2A, g2Start, g2End), vp2, pair.g2.total_length, canvasWidth)
-      const x2b = bpToPx(clipBp(g2B, g2Start, g2End), vp2, pair.g2.total_length, canvasWidth)
+      const rawX1a = bpToPx(clipBp(g1A, g1Start, g1End), vp1, pair.g1.total_length, canvasWidth)
+      const rawX1b = bpToPx(clipBp(g1B, g1Start, g1End), vp1, pair.g1.total_length, canvasWidth)
+      const rawX2a = bpToPx(clipBp(g2A, g2Start, g2End), vp2, pair.g2.total_length, canvasWidth)
+      const rawX2b = bpToPx(clipBp(g2B, g2Start, g2End), vp2, pair.g2.total_length, canvasWidth)
 
-      // Sub-pixel on both sides → invisible. Skip.
-      if (x1b - x1a < 1 && Math.abs(x2b - x2a) < 1) continue
+      // At low zoom a typical block can span well under one pixel on one or
+      // both sides. Rather than drop it (which used to leave visible gaps at
+      // <4× zoom), clamp each side to a minimum of 1 px around its midpoint.
+      // Overlapping clamped rects of the same colour merge inside the same
+      // Path2D, so a busy region renders as a saturated stripe instead of a
+      // gap and total fill cost stays flat.
+      const [x1a, x1b] = clampMinWidth(rawX1a, rawX1b)
+      const [x2a, x2b] = clampMinWidth(rawX2a, rawX2b)
 
       const color = colorFor(block.reference_seq, referenceColorMap)
       const span = ((g1B - g1A) + (g2B - g2A)) / 2

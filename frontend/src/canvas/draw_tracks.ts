@@ -109,7 +109,11 @@ export function drawTracks(
       extents.push({ name: seq.name, x0, x1, y })
     }
 
-    // Overlay pass: painted regions, with sub-pixel LOD.
+    // Overlay pass: painted regions. At low zoom a region can span well under
+    // one pixel; rather than dropping it (which leaves visible UNKNOWN_COLOR
+    // gaps) we clamp to a minimum of 1 px around its midpoint. Overlapping
+    // clamped rects of the same colour merge in the same Path2D — one fill
+    // per colour regardless.
     if (painting) {
       const seqOffsets = new Map(g.sequences.map((s) => [s.name, s.offset]))
       for (const r of painting) {
@@ -118,11 +122,16 @@ export function drawTracks(
         const rStart = off + r.start
         const rEnd = off + r.end
         if (rEnd <= startBp || rStart >= endBp) continue
-        const x0 = Math.max(0, bpToPx(rStart, vp, g.total_length, canvasWidth))
-        const x1 = Math.min(canvasWidth, bpToPx(rEnd, vp, g.total_length, canvasWidth))
-        const w = x1 - x0
-        if (w < 1) continue // sub-pixel: would alias into a single column anyway
-        addRect(colorFor(r.reference_seq, referenceColorMap), x0, y, w, layout.trackHeight)
+        const rx0 = Math.max(0, bpToPx(rStart, vp, g.total_length, canvasWidth))
+        const rx1 = Math.min(canvasWidth, bpToPx(rEnd, vp, g.total_length, canvasWidth))
+        let px0 = rx0
+        let w = rx1 - rx0
+        if (w < 1) {
+          const mid = (rx0 + rx1) / 2
+          px0 = Math.max(0, Math.min(canvasWidth - 1, mid - 0.5))
+          w = 1
+        }
+        addRect(colorFor(r.reference_seq, referenceColorMap), px0, y, w, layout.trackHeight)
       }
     }
 
