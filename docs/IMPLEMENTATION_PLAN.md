@@ -370,7 +370,7 @@ Order is dependency-driven; each task is small and independently testable.
 ### 5.6 Status bar ✅
 - [x] Shows current visible region (top genome as anchor), bp/px, current LOD mode, and a "loading N pairs" badge for in-flight derivations.
 
-### 5.7 v0.1.1 refinements — reference-propagated colors + scoped zoom/pan
+### 5.7 v0.1.1 refinements — reference-propagated colors + scoped zoom/pan ✅
 
 **Color propagation via the top (reference) genome.** Today every genome carries its own palette and a ribbon is coloured by its *target* sequence. This makes translocations invisible: the same piece of ancestry carries different colours in different genomes. Fix by propagating colour along SCM identity from a single reference (the top-ordered genome):
 
@@ -382,16 +382,17 @@ Order is dependency-driven; each task is small and independently testable.
 - **Reorder triggers repaint.** Changing the top genome swaps the colour space; pair caches are invalidated because blocks' `reference_seq` changes.
 
 Backend tasks:
-- [ ] `SCMStore.reference_seq_map(ref_genome_id)` — returns an `int32` array of length `universe_size` mapping `scm_id_idx → reference_seq_idx` (or `-1` if the SCM is absent from the reference). Cached lazily per reference id.
-- [ ] Extend `SyntenyBlock` with `scm_row_start, scm_row_end` (indices into `PairwiseSCM.rows`) so the API layer can look up each block's SCMs for dominant-reference computation. Update `detect_blocks` + tests.
-- [ ] `/api/synteny/blocks` + `/api/synteny/scms` accept `reference=<genome_id>` query param; validate. When provided, populate `reference_seq` on each block (plurality) and each SCM (direct lookup).
-- [ ] Schema updates: optional `reference_seq: str | null` on `SyntenyBlockSchema` and `PairwiseSCMSchema`.
+- [x] `SCMStore.reference_seq_map(ref_genome_id)` — returns an `int32` array of length `universe_size` mapping `scm_id_idx → reference_seq_idx` (or `-1` if the SCM is absent from the reference). Cached lazily per reference id.
+- [x] Extend `SyntenyBlock` with `scm_row_start, scm_row_end` (indices into `PairwiseSCM.rows`) so the API layer can look up each block's SCMs for dominant-reference computation. Update `detect_blocks` + tests.
+- [x] `/api/synteny/blocks` + `/api/synteny/scms` accept `reference=<genome_id>` query param; validate. When provided, populate `reference_seq` on each block (plurality) and each SCM (direct lookup).
+- [x] Schema updates: optional `reference_seq: str | null` on `SyntenyBlockSchema` and `PairwiseSCMSchema`.
+- [x] **Track painting:** `GET /api/paint?genome_id=X&reference=Y` returns run-length-encoded `PaintRegion`s (one per contiguous run of same-reference-seq SCMs), so non-reference chromosome bars can be drawn in multiple colours.
 
 Frontend tasks:
-- [ ] API client: add `reference` to `blocks()` and `scms()` options.
-- [ ] Pair-cache keys include the reference id (`"g1|g2|ref"`). Changing order[0] evicts or just re-fetches; simpler to re-fetch.
-- [ ] Ribbon + SCM renderers: colour = reference genome's `Sequence.color` looked up from `reference_seq`; fallback to `palette.minor_color` from `/api/config` when `reference_seq` is null.
-- [ ] When dragging reorder, if order[0] changes, wipe pair caches before re-deriving.
+- [x] API client: add `reference` to `blocks()` and `scms()` options.
+- [x] Pair-cache keys include the reference id (`"g1|g2|ref"`). Reorder → new reference → re-fetch under new keys.
+- [x] Ribbon + SCM renderers: colour = reference genome's `Sequence.color` looked up from `reference_seq`; fallback to `UNKNOWN_COLOR` (#3a3a3a, darker than palette minor) when `reference_seq` is null.
+- [x] **Painted track bars:** fetch `/api/paint` per genome; `drawTracks` paints each region in its reference colour, fills uncovered stretches with `UNKNOWN_COLOR`, falls back to per-sequence palette during initial load.
 
 **Scoped zoom + pan: global by default, per-genome on modifier or mid-track interaction.**
 
@@ -403,18 +404,19 @@ Frontend tasks:
 - Status bar reflects current scope ("global" or "genome: ID").
 
 Frontend tasks:
-- [ ] Replace the single `viewport` with `globalViewport: Viewport` + `overrides: SvelteMap<genome_id, Viewport>`.
-- [ ] Helper `effectiveViewport(genome_id)` returns override if present else global. All renderers switch to this lookup.
-- [ ] `genomeUnderCursor(y)` — geometric hit test against `trackY`/`trackHeight`; returns id or null.
-- [ ] Wheel handler: if `e.shiftKey && genomeUnderCursor` → update that genome's override; else update global.
-- [ ] Pointer handlers: capture target genome at `pointerdown`; apply to the same genome (or global) throughout the drag.
-- [ ] Reset-view clears `overrides` alongside resetting `globalViewport`.
-- [ ] Status bar shows scope indicator when any override is active.
+- [x] Replace the single `viewport` with `globalViewport: Viewport` + `viewportOverrides: SvelteMap<genome_id, Viewport>`.
+- [x] Helper `effectiveViewport(genome_id)` returns override if present else global; all renderers switched to a `ViewportFn` signature so ribbons compute left/right x-mappings with per-genome viewports.
+- [x] `canvas/hit_test.ts::genomeIndexAt(y, n)` — geometric hit test against `trackY`/`trackHeight`; returns index or null. 8 vitest cases.
+- [x] Wheel handler: `e.shiftKey && pointerGenomeId` → update that genome's override; else update global.
+- [x] Pointer handlers: capture target genome at `pointerdown`; apply to the same genome (or global) throughout the drag.
+- [x] Reset-view clears `viewportOverrides` alongside resetting `globalViewport`.
+- [x] Status bar shows `global` / `N override(s)` indicator; LOD + zoom anchor is the top genome's effective viewport.
+- [x] Header hint text ("Shift = scope to one genome") with tooltip.
 
 Tests (additions):
-- [ ] Backend: `reference_seq_map` correctness (absent SCMs → -1; all present → seq index matches the reference).
-- [ ] Backend: API returns expected `reference_seq` on blocks (dominant-vote logic) and SCMs.
-- [ ] Frontend (vitest): `genomeUnderCursor` boundary cases; `effectiveViewport` fallback to global.
+- [x] Backend: `reference_seq_map` correctness (absent SCMs → -1; multi-sequence reference; cached identity).
+- [x] Backend: API returns expected `reference_seq` on blocks (dominant-vote) and SCMs (direct lookup); unknown-reference 404; `/api/paint` trivial self + mixed non-reference + 404s + monotonic invariant.
+- [x] Frontend (vitest): `genomeIndexAt` boundary cases; `colorFor` null/unknown/known.
 
 **Phase-2 done criteria:**
 1. With `example_data` loaded and 8 genomes, a fresh page renders all tracks + initial adjacent-pair ribbons within < 3 s.
