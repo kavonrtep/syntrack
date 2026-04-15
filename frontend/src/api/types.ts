@@ -99,6 +99,20 @@ export type SCMResponse = {
   positions: SCMPosition[]
 }
 
+export type PaintRegion = {
+  seq: string
+  start: number
+  end: number
+  reference_seq: string | null
+  scm_count: number
+}
+
+export type PaintResponse = {
+  genome_id: string
+  reference: string
+  regions: PaintRegion[]
+}
+
 export type BlockDetection = { max_gap: number; min_block_size: number }
 export type BlastFiltering = {
   min_pident: number

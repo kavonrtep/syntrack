@@ -127,6 +127,26 @@ class SCMResponse(_Schema):
     positions: list[SCMPositionSchema]
 
 
+# ------------------------------ /api/paint --------------------------------
+
+
+class PaintRegionSchema(_Schema):
+    """One contiguous run of SCMs on ``(genome_id, seq)`` that share the same
+    reference_seq (or all lack one)."""
+
+    seq: str
+    start: int
+    end: int
+    reference_seq: str | None
+    scm_count: int
+
+
+class PaintResponse(_Schema):
+    genome_id: str
+    reference: str
+    regions: list[PaintRegionSchema]
+
+
 # ------------------------------ /api/config -------------------------------
 
 

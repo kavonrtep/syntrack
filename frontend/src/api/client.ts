@@ -5,6 +5,7 @@ import type {
   ConfigResponse,
   GenomesResponse,
   PairsResponse,
+  PaintResponse,
   SCMResponse,
   SCMsResponse,
 } from './types'
@@ -77,6 +78,9 @@ export const api = {
 
   scm: (scmId: string, signal?: AbortSignal) =>
     request<SCMResponse>(`/scm/${encodeURIComponent(scmId)}`, {}, { signal }),
+
+  paint: (genomeId: string, reference: string, signal?: AbortSignal) =>
+    request<PaintResponse>('/paint', { genome_id: genomeId, reference }, { signal }),
 
   config: (signal?: AbortSignal) =>
     request<ConfigResponse>('/config', {}, { signal }),

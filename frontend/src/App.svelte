@@ -3,7 +3,13 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
   import { api } from './api/client'
-  import type { BlocksResponse, ConfigResponse, Genome, SCMsResponse } from './api/types'
+  import type {
+    BlocksResponse,
+    ConfigResponse,
+    Genome,
+    PaintRegion,
+    SCMsResponse,
+  } from './api/types'
   import { referenceColorMap } from './canvas/colors'
   import {
     DEFAULT_VIEWPORT,
@@ -46,8 +52,14 @@
   const loadingBlocks = new SvelteSet<string>()
   const pairScms = new SvelteMap<string, SCMsResponse>()
   const loadingScms = new SvelteSet<string>()
+  // Paint cache: key = "genome_id|reference"
+  const paintByPair = new SvelteMap<string, PaintRegion[]>()
+  const loadingPaint = new SvelteSet<string>()
   function pairKey(g1: string, g2: string, ref: string): string {
     return `${g1}|${g2}|${ref}`
+  }
+  function paintKey(genomeId: string, ref: string): string {
+    return `${genomeId}|${ref}`
   }
 
   // ----------------------------- Drag state ------------------------------
@@ -194,12 +206,48 @@
     }
   })
 
+  // Fetch reference painting for every genome in order.
+  $effect(() => {
+    const ref = referenceGenome?.id
+    if (!ref) return
+    for (const g of genomesInOrder) {
+      const key = paintKey(g.id, ref)
+      if (paintByPair.has(key) || loadingPaint.has(key)) continue
+      loadingPaint.add(key)
+      api.paint(g.id, ref).then(
+        (resp) => paintByPair.set(key, resp.regions),
+        (err) => {
+          error = `Failed to load painting for ${g.id}: ${err}`
+        },
+      ).finally(() => loadingPaint.delete(key))
+    }
+  })
+
+  let paintByGenome = $derived.by<Map<string, PaintRegion[]>>(() => {
+    const map = new Map<string, PaintRegion[]>()
+    const ref = referenceGenome?.id
+    if (!ref) return map
+    for (const g of genomesInOrder) {
+      const regions = paintByPair.get(paintKey(g.id, ref))
+      if (regions) map.set(g.id, regions)
+    }
+    return map
+  })
+
   // Track canvas redraws.
   $effect(() => {
     if (!trackCanvas || !genomes || canvasWidth < 2 || canvasHeight < 2) return
     const ctx = sizeAndContext(trackCanvas, canvasWidth, canvasHeight)
     if (!ctx) return
-    drawTracks(ctx, genomesInOrder, viewport, canvasWidth, canvasHeight)
+    drawTracks(
+      ctx,
+      genomesInOrder,
+      viewport,
+      canvasWidth,
+      canvasHeight,
+      paintByGenome,
+      refColorMap,
+    )
   })
 
   // Connection canvas: ribbons (LOD-low) or SCM lines (LOD-high).
@@ -369,9 +417,10 @@
         <canvas bind:this={ribbonCanvas} class="layer ribbons"></canvas>
         <canvas bind:this={trackCanvas} class="layer tracks"></canvas>
       </div>
-      {#if loadingBlocks.size + loadingScms.size > 0}
+      {#if loadingBlocks.size + loadingScms.size + loadingPaint.size > 0}
+        {@const total = loadingBlocks.size + loadingScms.size + loadingPaint.size}
         <div class="badge">
-          loading {loadingBlocks.size + loadingScms.size} pair{loadingBlocks.size + loadingScms.size === 1 ? '' : 's'}…
+          loading {total} request{total === 1 ? '' : 's'}…
         </div>
       {/if}
     </div>
