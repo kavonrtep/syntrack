@@ -113,6 +113,19 @@
   let fadeLevel = $state(0)
   let fadeMultiplier = $derived(1 - fadeLevel)
 
+  // Highlighted-SCM count per genome, derived from the /highlight response.
+  // Source genome gets source.scm_count; every target gets its own scm_count
+  // (backend returns an entry for every non-source genome, possibly 0).
+  let highlightedByGenome = $derived.by<Map<string, number>>(() => {
+    const m = new Map<string, number>()
+    if (!highlightResult) return m
+    m.set(highlightResult.source.genome_id, highlightResult.source.scm_count)
+    for (const t of highlightResult.targets) {
+      m.set(t.genome_id, t.scm_count)
+    }
+    return m
+  })
+
   // ----------------------------- Lifecycle -------------------------------
 
   onMount(async () => {
@@ -566,17 +579,44 @@
   }
 
   function downloadHighlightScmIds(): void {
-    if (!highlightResult) return
+    if (!highlightResult || !allGenomes) return
     const src = highlightResult.source
     const ids = src.scm_ids
-    const blob = new Blob([ids.join('\n') + (ids.length ? '\n' : '')], {
-      type: 'text/plain;charset=utf-8',
-    })
+    if (ids.length === 0) return
+
+    // Build per-SCM presence map across every loaded genome. Source is
+    // present by definition; targets are present iff scm_id appears in
+    // their positions list.
+    const presence = new Map<string, Set<string>>()
+    for (const id of ids) presence.set(id, new Set([src.genome_id]))
+    for (const target of highlightResult.targets) {
+      for (const pos of target.positions) {
+        presence.get(pos.scm_id)?.add(target.genome_id)
+      }
+    }
+
+    // Columns: scm_id, present_in, <one per loaded genome in server order>.
+    // Using allGenomes (server order) keeps the column layout stable across
+    // reorder/visibility changes.
+    const genomeIds = allGenomes.map((g) => g.id)
+    const header = ['scm_id', 'present_in', ...genomeIds].join('\t')
+    const lines = [header]
+    for (const scmId of ids) {
+      const set = presence.get(scmId) ?? new Set<string>()
+      const cells: string[] = [
+        scmId,
+        String(set.size),
+        ...genomeIds.map((gid) => (set.has(gid) ? '1' : '0')),
+      ]
+      lines.push(cells.join('\t'))
+    }
+    const text = lines.join('\n') + '\n'
+    const blob = new Blob([text], { type: 'text/tab-separated-values;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
     const safeSeq = src.seq.replace(/[^A-Za-z0-9._-]/g, '_')
-    a.download = `syntrack_${src.genome_id}_${safeSeq}_${src.start}-${src.end}_scm_ids.txt`
+    a.download = `syntrack_${src.genome_id}_${safeSeq}_${src.start}-${src.end}_scm_ids.tsv`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -754,7 +794,7 @@
   <button
     onclick={downloadHighlightScmIds}
     disabled={!highlightResult || highlightResult.source.scm_count === 0}
-    title="Download the SCM IDs inside the highlighted region as a plain-text file (one ID per line)."
+    title="Download a TSV of the highlighted SCMs: scm_id, present_in (genome count), and one 0/1 presence column per loaded genome."
   >
     ↓ SCM IDs
   </button>
@@ -776,6 +816,7 @@
         </div>
       </div>
       {#each allGenomes as g (g.id)}
+        {@const hlCount = highlightedByGenome.get(g.id) ?? 0}
         <label class="genome-toggle" class:hidden={!isVisible(g.id)}>
           <input
             type="checkbox"
@@ -784,6 +825,15 @@
           />
           <span class="toggle-label">{g.label}</span>
           <span class="toggle-meta">{g.scm_count.toLocaleString()}</span>
+          {#if highlightResult}
+            <span
+              class="toggle-highlight"
+              class:zero={hlCount === 0}
+              title="{hlCount.toLocaleString()} SCM{hlCount === 1 ? '' : 's'} in the current highlight"
+            >
+              {hlCount.toLocaleString()}
+            </span>
+          {/if}
         </label>
       {/each}
     </aside>
@@ -972,6 +1022,24 @@
     color: #888;
     font-size: 0.8em;
     font-variant-numeric: tabular-nums;
+  }
+
+  .toggle-highlight {
+    background: rgba(255, 220, 50, 0.18);
+    border: 1px solid rgba(255, 220, 50, 0.55);
+    color: #ffdc32;
+    font-size: 0.75em;
+    font-variant-numeric: tabular-nums;
+    padding: 0.05em 0.45em;
+    border-radius: 10px;
+    min-width: 1.5em;
+    text-align: center;
+  }
+
+  .toggle-highlight.zero {
+    background: transparent;
+    border-color: #444;
+    color: #555;
   }
 
   .loading,
