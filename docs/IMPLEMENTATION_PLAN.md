@@ -27,20 +27,23 @@ This plan covers **how** we build SynTrack. **What** we build is fixed by `docs/
 
 ---
 
-## 0a. First release scope (v0.1)
+## 0a. First release scope (v0.1) — ✅ SHIPPED
 
-What ships:
-- All of Phase 1 (backend MVP + CLI + tests).
-- All of Phase 2 (Svelte frontend with tracks, ribbons, SCM lines, reorder, zoom/pan).
-- A 5-line `README.md` quickstart for loading `example_data/`.
+Delivered: 159 backend tests + 21 frontend tests pass; ruff/mypy/svelte-check clean; end-to-end verified on the real pea dataset (`example_data/`, 8 genomes, 1.39M unique SCMs).
 
-What does **not** ship in v0.1 (deferred to v0.2+):
-- `/api/highlight`, `/api/fish` and all overlay rendering.
-- Block parameter UI (sliders) and `/api/stats/blocks` sweep diagnostics.
-- Export endpoints (BED, TSV, txt, PNG/SVG).
-- `syntrack precompute` and on-disk cache (in-memory LRU only for v0.1).
+What shipped:
+- All of Phase 1 — backend MVP + `syntrack serve` / `syntrack lint-data` CLI + tests.
+- Phase 2 core — Svelte 5 frontend with tracks, block ribbons, SCM-line LOD, drag-to-reorder, cursor-pinned wheel zoom, drag-pan.
+- Quickstart in `README.md` with three install paths (uv-managed, plain venv, hermit sandbox).
 
-The v0.1 scope is deliberately tight so we can validate rendering perf on the real pea dataset before paying for overlay infrastructure. If Phase 2 reveals perf or UX problems, we adjust before building Phase 3.
+Deferred to v0.2 (still unchecked in §§5–7 below):
+- `/api/highlight`, `/api/fish` and overlay rendering (Phase 3).
+- Block-parameter UI (sliders) and `/api/stats/blocks` sweep diagnostics (Phase 4).
+- Export endpoints (BED, TSV, txt, PNG/SVG) (Phase 4).
+- `syntrack precompute` and on-disk `.npz` cache (Phase 4, §4.5 second bullet).
+- Request debouncing + `AbortController` cancellation in the frontend (§5.5 polish).
+- Axis ticks on track canvas (§5.3 polish).
+- `syntrack stats` CLI (§4.7).
 
 ---
 
@@ -241,18 +244,18 @@ class PairCache:
 
 Order is dependency-driven; each task is small and independently testable.
 
-### 4.1 Scaffolding
-- [ ] `pyproject.toml`, `uv.lock`, `ruff.toml`, `mypy.ini`.
-- [ ] `syntrack/__init__.py` with version constant.
-- [ ] `syntrack/cli.py` with `typer` app and `serve` stub.
-- [ ] `syntrack/config.py`: pydantic-settings model from YAML; load `syntrack_config.example.yaml` round-trip test.
+### 4.1 Scaffolding ✅
+- [x] `pyproject.toml`, `uv.lock`, `ruff.toml`, `mypy.ini`.
+- [x] `syntrack/__init__.py` with version constant.
+- [x] `syntrack/cli.py` with `typer` app and `serve` stub.
+- [x] `syntrack/config.py`: pydantic-settings model from YAML; load `syntrack_config.example.yaml` round-trip test.
 
 **Done when:** `uv run syntrack --help` and `uv run pytest -q` both succeed against an empty test suite.
 
-### 4.2 IO layer
-- [ ] `io/fai.py` — `read_fai` returns `list[Sequence]` with cumulative offsets.
-- [ ] `io/manifest.py` — read `genomes.csv`, resolve relative paths, validate file existence.
-- [ ] `io/blast.py` — polars-based parser:
+### 4.2 IO layer ✅
+- [x] `io/fai.py` — `read_fai` returns `list[Sequence]` with cumulative offsets.
+- [x] `io/manifest.py` — read `genomes.csv`, resolve relative paths, validate file existence.
+- [x] `io/blast.py` — polars-based parser:
   1. Read TSV with explicit dtypes (no schema inference).
   2. Quality filter (`min_pident`, `min_length`, `max_evalue`).
   3. Strand inference + canonical `start < end` swap.
@@ -268,9 +271,9 @@ Order is dependency-driven; each task is small and independently testable.
 - Hit beyond seq length → dropped + counted.
 - Negative-strand hit (sstart > send) → coordinates swapped, strand = `-`.
 
-### 4.3 Stores
-- [ ] `store/genome.py` — `GenomeStore` from FAI + optional label override. Computes per-genome palette assignment per D14 (top-*N* sequences by length → distinct colors; rest → "minor" color). Output is exposed on `Sequence.color`.
-- [ ] `store/scm.py` — `SCMStore.load`:
+### 4.3 Stores ✅
+- [x] `store/genome.py` — `GenomeStore` from FAI + optional label override. Computes per-genome palette assignment per D14 (top-*N* sequences by length → distinct colors; rest → "minor" color). Output is exposed on `Sequence.color`.
+- [x] `store/scm.py` — `SCMStore.load`:
   1. For each genome: `parse_and_filter_blast` → polars DF.
   2. Map `scm_id` strings into a global universe (`dict[str,int]`).
   3. Convert each per-genome DF to a numpy structured array sorted by `offset`.
@@ -281,10 +284,10 @@ Order is dependency-driven; each task is small and independently testable.
 - `hits_in_region` returns expected slice (binary search bounds).
 - `positions_of(idx)` returns positions in every genome containing the SCM.
 
-### 4.4 Derivation
-- [ ] `derive/pair.py` — sorted merge join on `scm_id_idx`.
+### 4.4 Derivation ✅
+- [x] `derive/pair.py` — sorted merge join on `scm_id_idx`.
   - Use numpy `searchsorted` / `intersect1d`-style approach, not Python loops.
-- [ ] `derive/block.py` — iterative scan with strict order (design §3.3, all 4 conditions).
+- [x] `derive/block.py` — iterative scan with strict order (design §3.3, all 4 conditions).
 
 **Block defaults (per D10 — blocks exist to reduce points-to-render at low zoom; they are not biological annotations):**
 
@@ -306,25 +309,25 @@ Order is dependency-driven; each task is small and independently testable.
 - Inter-chromosomal jump → split.
 - Property test: every block is internally collinear (random fuzz).
 
-### 4.5 Cache
-- [ ] `cache.py` — LRU dict capped at `max_pairs`. `get_or_derive` short-circuits on cache hit.
-- [ ] `.npz` write/read with manifest hash; on parameter change, blocks recomputed but PairwiseSCM retained (matches design §3.3 tuning paragraph).
+### 4.5 Cache ✅ (in-memory) / ⏸ (.npz deferred to v0.2)
+- [x] `cache.py` — LRU dict capped at `max_pairs`. `get_or_derive` short-circuits on cache hit.
+- [ ] `.npz` write/read with manifest hash; on parameter change, blocks recomputed but PairwiseSCM retained (matches design §3.3 tuning paragraph). *(deferred to v0.2 per D16)*
 
-### 4.6 API surface
-- [ ] `api/app.py` — FastAPI factory; CORS for `:5173` in dev only.
-- [ ] Routes (each in its own file, mounted in `app.py`):
+### 4.6 API surface ✅
+- [x] `api/app.py` — FastAPI factory; CORS for `:5173` in dev only.
+- [x] Routes (each in its own file, mounted in `app.py`):
   - `GET /api/genomes` — design §4.2.
   - `GET /api/pairs` — derived-status table (presence-matrix counts, no derivation triggered).
   - `GET /api/synteny/blocks?g1=&g2=&region_g1=&region_g2=&min_scm=` — triggers cache.
   - `GET /api/synteny/scms?g1=&g2=&region_g1=&region_g2=&limit=` — uniform downsampling at the SCMStore level (not after JSON serialization).
   - `GET /api/scm/{scm_id}` — universe lookup.
   - `GET /api/config`, `PUT /api/config` (block params only).
-- [ ] API tests with `httpx.AsyncClient` against the FastAPI app, using a tiny preloaded `SCMStore` fixture.
+- [x] API tests with `httpx.AsyncClient` against the FastAPI app, using a tiny preloaded `SCMStore` fixture. *(implemented with FastAPI `TestClient`)*
 
-### 4.7 CLI commands
-- [ ] `syntrack serve --config <path> [--reload]` — runs uvicorn.
-- [ ] `syntrack lint-data --config <path>` — runs the loader, prints filtering stats per genome, exits non-zero on validation errors. (Useful smoke test on `example_data/`.)
-- [ ] `syntrack stats --pair g1,g2` — runs `/api/stats/blocks` logic offline.
+### 4.7 CLI commands ✅ (v0.1 subset)
+- [x] `syntrack serve --config <path> [--reload]` — runs uvicorn.
+- [x] `syntrack lint-data --config <path>` — runs the loader, prints filtering stats per genome, exits non-zero on validation errors. (Useful smoke test on `example_data/`.)
+- [ ] `syntrack stats --pair g1,g2` — runs `/api/stats/blocks` logic offline. *(deferred — part of Phase 4 tuning UI)*
 
 **Phase-1 done criteria:**
 1. `syntrack lint-data --config example_data/config.yaml` succeeds on all 8 pea genomes and prints filtering stats matching `example_data/README.md` scale (~250–500K SCMs/genome after filter from ~950K raw).
@@ -335,35 +338,37 @@ Order is dependency-driven; each task is small and independently testable.
 
 ## 5. Phase 2 — Frontend MVP
 
-### 5.1 Scaffolding
-- [ ] `npm create vite@latest frontend -- --template svelte-ts`.
-- [ ] Vite config: proxy `/api` → `127.0.0.1:8765`.
-- [ ] `api/client.ts` — typed wrappers for `/api/genomes`, `/api/pairs`, `/api/synteny/blocks`, `/api/synteny/scms`.
-- [ ] App shell: toolbar, central canvas area, status bar.
+### 5.1 Scaffolding ✅
+- [x] Vite + Svelte 5 + TypeScript scaffold (written by hand rather than via `npm create`).
+- [x] Vite config: proxy `/api` → `127.0.0.1:8765`.
+- [x] `api/client.ts` — typed wrappers for `/api/genomes`, `/api/pairs`, `/api/synteny/blocks`, `/api/synteny/scms`, plus `/scm/{id}` and `/config`.
+- [x] App shell: header, central canvas area, status bar. *(no toolbar yet — deferred with Phase 4 tuning UI)*
 
-### 5.2 Coordinate system & LOD
-- [ ] `canvas/lod.ts`: `bp_per_px = visible_genomic_range / canvas_width`. Threshold derived from config (`block_threshold_bp_per_px`, default 50000).
-- [ ] Helper: `genomicToScreen(seq, pos)` and inverse.
+### 5.2 Coordinate system & LOD ✅
+- [x] `canvas/lod.ts`: `bp_per_px = visible_genomic_range / canvas_width`. Threshold derived from config (`block_threshold_bp_per_px`, default 50000).
+- [x] Helper: `canvas/coords.ts` — `bpToPx` / `pxToBp` with `Viewport` (zoom + center); cursor-pinned `zoomAtFraction`.
 
-### 5.3 Track canvas
-- [ ] Render genome bars from `/api/genomes`, segmented by `Sequence.offset` and `length`.
-- [ ] Chromosome labels, axis ticks at human-friendly intervals.
-- [ ] Redraw triggered only on resize / reorder / zoom (not pan within bounds).
+### 5.3 Track canvas ✅ (core) / ⏸ (axis ticks)
+- [x] Render genome bars from `/api/genomes`, segmented by `Sequence.offset` and `length`.
+- [x] Chromosome labels (sequence name centred when the bar exceeds 30 px).
+- [ ] Axis ticks at human-friendly intervals. *(deferred — v0.2 polish)*
+- [x] Redraw triggered only on resize / reorder / zoom. *(driven by Svelte 5 `$effect` on relevant state; pan updates viewport.center which also triggers redraw — acceptable for v0.1, optimisation deferred)*
 
-### 5.4 Connection canvas
-- [ ] Block ribbons for adjacent pairs at low zoom: width ∝ block span, opacity ∝ `scm_count / span` normalized per pair.
-- [ ] SCM lines at high zoom from `/api/synteny/scms` with `limit=5000`.
-- [ ] Color by **target sequence** in the connection's lower-track genome. Palette is supplied per genome by `/api/genomes` (`sequences[i].color`, computed server-side per D14 — top *N* by length get distinct hues, the rest collapse into a "minor" bucket color). Frontend never derives palette from sequence names.
-- [ ] Strand encoding: `+` parallel ribbon, `−` crossed.
+### 5.4 Connection canvas ✅
+- [x] Block ribbons for adjacent pairs at low zoom: opacity ∝ density (scm_count / span_kb).
+- [x] SCM lines at high zoom from `/api/synteny/scms` with `limit=5000`.
+- [x] Color by **target sequence** in the connection's lower-track genome. Palette is supplied per genome by `/api/genomes` (`sequences[i].color`, computed server-side per D14 — top *N* by length get distinct hues, the rest collapse into a "minor" bucket color). Frontend never derives palette from sequence names.
+- [x] Strand encoding: `+` parallel ribbon, `−` crossed.
 
-### 5.5 Interaction
-- [ ] Mouse-wheel zoom centered on cursor (X axis only).
-- [ ] Click-drag pan on empty canvas area.
-- [ ] Genome reorder via HTML5 drag-and-drop on `GenomeList.svelte` items; on drop, recompute adjacency, request newly adjacent pairs (debounced 200 ms), show spinner per pending pair.
-- [ ] Request cancellation on rapid zoom: `AbortController` per pending fetch, cancel on next request.
+### 5.5 Interaction ✅ (core) / ⏸ (debounce + cancellation)
+- [x] Mouse-wheel zoom centred on cursor (X axis only).
+- [x] Click-drag pan on empty canvas area.
+- [x] Genome reorder via HTML5 drag-and-drop on sidebar items; on drop, recompute adjacency, request newly adjacent pairs (spinner badge shown per pending pair).
+- [ ] Request debounce (200 ms) on adjacency changes. *(deferred — v0.2 polish)*
+- [ ] Request cancellation on rapid zoom: `AbortController` per pending fetch, cancel on next request. *(deferred — v0.2 polish; AbortSignal plumbing exists in the API client)*
 
-### 5.6 Status bar
-- [ ] Shows current visible region (genome 1's coordinate as anchor), bp/px, current LOD mode, in-flight request count.
+### 5.6 Status bar ✅
+- [x] Shows current visible region (top genome as anchor), bp/px, current LOD mode, and a "loading N pairs" badge for in-flight derivations.
 
 **Phase-2 done criteria:**
 1. With `example_data` loaded and 8 genomes, a fresh page renders all tracks + initial adjacent-pair ribbons within < 3 s.
@@ -447,20 +452,20 @@ Order is dependency-driven; each task is small and independently testable.
 v0.1 ships Phases 1 + 2 only (D16). Phases 3 and 4 are post-v0.1 and not started until v0.1 has been used against the real `example_data` for at least one round of feedback.
 
 ```
-v0.1 ─────────────────────────────────────────────────
-  4.1 scaffold
-    └ 4.2 io
-        └ 4.3 stores
-            ├ 4.4 derive
-            │    └ 4.5 cache (in-memory LRU only for v0.1)
-            │         └ 4.6 api ──┐
-            └ 4.7 cli             │
-                                  └─> Phase 2 (frontend MVP)
-                                      └─> v0.1 RELEASE
+v0.1 ───────────────────────────────────────────── ✅ SHIPPED
+  4.1 scaffold                    ✅
+    └ 4.2 io                      ✅
+        └ 4.3 stores              ✅
+            ├ 4.4 derive          ✅
+            │    └ 4.5 cache      ✅ (in-memory LRU; .npz → v0.2)
+            │         └ 4.6 api   ✅
+            └ 4.7 cli             ✅ (serve + lint-data; stats → v0.2)
+                                  └─> Phase 2 (frontend MVP)  ✅
 
-v0.2+ (post-feedback) ────────────────────────────────
+v0.2+ (post-feedback) ────────────────────────────── ⏸
   Phase 3 (highlight + FISH)
-  Phase 4 (tuning UI, exports, precompute CLI, .npz cache, polish)
+  Phase 4 (tuning UI, exports, precompute CLI, .npz cache,
+           request debouncing/cancellation, axis ticks, tooltips)
 ```
 
 Strict dependencies are linear inside a phase. Phase 2 may start once §4.6 is stable; it does not need §4.7 (CLI). Phases 3 and 4 are independent of each other and can be picked up in either order after v0.1.
