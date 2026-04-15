@@ -27,23 +27,40 @@ This plan covers **how** we build SynTrack. **What** we build is fixed by `docs/
 
 ---
 
-## 0a. First release scope (v0.1) — ✅ SHIPPED
+## 0a. Shipped increments
 
-Delivered: 159 backend tests + 21 frontend tests pass; ruff/mypy/svelte-check clean; end-to-end verified on the real pea dataset (`example_data/`, 8 genomes, 1.39M unique SCMs).
+Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs); end-to-end verified each time. **181 backend + 38 frontend tests** pass; ruff / mypy / svelte-check clean.
 
-What shipped:
-- All of Phase 1 — backend MVP + `syntrack serve` / `syntrack lint-data` CLI + tests.
-- Phase 2 core — Svelte 5 frontend with tracks, block ribbons, SCM-line LOD, drag-to-reorder, cursor-pinned wheel zoom, drag-pan.
-- Quickstart in `README.md` with three install paths (uv-managed, plain venv, hermit sandbox).
+### v0.1 ✅ (Phases 1 + 2 core)
+- All of Phase 1 — backend MVP, `syntrack serve` / `lint-data` CLI, tests.
+- Phase 2 core — Svelte 5 frontend: tracks, block ribbons, SCM-line LOD, cursor-pinned wheel zoom, drag-pan, sidebar drag-to-reorder, status bar, in-memory LRU cache.
 
-Deferred to v0.2 (still unchecked in §§5–7 below):
-- `/api/highlight`, `/api/fish` and overlay rendering (Phase 3).
-- Block-parameter UI (sliders) and `/api/stats/blocks` sweep diagnostics (Phase 4).
-- Export endpoints (BED, TSV, txt, PNG/SVG) (Phase 4).
-- `syntrack precompute` and on-disk `.npz` cache (Phase 4, §4.5 second bullet).
-- Request debouncing + `AbortController` cancellation in the frontend (§5.5 polish).
-- Axis ticks on track canvas (§5.3 polish).
-- `syntrack stats` CLI (§4.7).
+### v0.1.1 ✅ (reference-propagated colors + scoped zoom/pan, §5.7)
+- `SCMStore.reference_seq_map` (cached CSR-derived map); `SyntenyBlock` carries row-range indices.
+- `/api/synteny/{blocks,scms}` accept `?reference=`; schemas gain `reference_seq`.
+- `/api/paint` — block-based aggregation against the reference so non-reference chromosomes are painted in multi-colour stripes (paint and ribbons share `BlockParams`, so `PUT /api/config` block-detection re-draws both).
+- Frontend: ribbon / SCM-line / track-bar colour resolved through the reference palette with `UNKNOWN_COLOR` fallback.
+- Scope deltas: override = `{ zoomFactor, centerDelta }` applied on top of `globalViewport`, so global pan/zoom propagate to everyone including overridden genomes.
+
+### v0.1.2 ✅ (perf, alignment, sidebar redesign, dev-workflow — §5.8)
+- rAF-throttled pan coalesces pointermove into one viewport update per frame.
+- Pixel-aware LOD: sub-pixel ribbons and paint regions clamp to 1 px instead of being dropped — no more "sparse at 1 ×" gaps.
+- Color-batched Canvas fills (`Path2D` per colour for tracks, per `(colour, opacity-bucket)` for ribbons).
+- High-contrast chromosome separators (1 px dark + 1 px light + tick above/below) independent of bar colour.
+- Double-click on any bar aligns every other genome so the syntenic basepair lands at the click pixel (`/api/align`, `canvas/alignment.ts`, anchor untouched, follows global pan/zoom afterwards).
+- Sidebar redesign: reorder moved to DOM handles sitting above each canvas bar; sidebar is now a visibility selector (checkboxes, `All` / `None` shortcuts, strike-through on unchecked).
+- `./dev.sh` auto-picks `.venv-hermit` inside hermit and falls back to `.venv` outside, so one script works in both contexts.
+
+### Still deferred (v0.2+)
+- `/api/highlight` (click-select a region, highlight syntenic SCMs as ticks on every genome — complementary to alignment, which moves the viewports). Phase 3.
+- `/api/fish` — *user-defined* custom paint sets (arbitrary SCM IDs / source regions become stackable colour overlays). Scope reduced because reference painting already covers the default "FISH the top genome's chromosomes" use case. Phase 3.
+- Block-param slider UI + `/api/stats/blocks` sweep diagnostics. Phase 4.
+- Exports (BED, TSV, txt, PNG/SVG). Phase 4.
+- `syntrack precompute` + on-disk `.npz` cache + manifest-hash invalidation. Phase 4.
+- Request debouncing + `AbortController` cancellation on rapid zoom. Phase 4 polish.
+- Axis ticks on the track canvas. Phase 4 polish.
+- `syntrack stats` CLI. Phase 4 polish.
+- Playwright E2E. Phase 4 polish.
 
 ---
 
@@ -79,92 +96,67 @@ Deferred to v0.2 (still unchecked in §§5–7 below):
 
 ```
 SynTrack/
-├── pyproject.toml
-├── uv.lock
-├── ruff.toml
-├── mypy.ini
-├── README.md
-├── CLAUDE.md
-├── syntrack_config.example.yaml
+├── pyproject.toml, uv.lock, ruff.toml, mypy.ini
+├── dev.sh                       # hermit-venv wrapper, auto-picks .venv-hermit / .venv
+├── README.md, CLAUDE.md, syntrack_config.example.yaml
+├── .venv-hermit/                # ./dev.sh setup target (gitignored)
+├── .venv/                       # host-side tools (gitignored; never touched by dev.sh setup)
 ├── docs/
-│   ├── DESIGN_v03.md          # spec, authoritative
-│   └── IMPLEMENTATION_PLAN.md # this file
-├── example_data/              # already populated
-│   ├── README.md
-│   ├── link_data.sh
-│   └── genomes.csv (+ symlinks; gitignored)
-├── syntrack/                  # Python package
-│   ├── __init__.py
-│   ├── __main__.py            # python -m syntrack
-│   ├── cli.py                 # typer app
-│   ├── config.py              # pydantic settings, YAML loader
+│   ├── DESIGN_v03.md            # spec, authoritative
+│   └── IMPLEMENTATION_PLAN.md   # this file
+├── example_data/
+│   ├── README.md, link_data.sh, syntrack_config.yaml
+│   └── *.fai / *.blast_out (+ genomes.csv symlinks; gitignored)
+├── syntrack/                    # Python package
+│   ├── __init__.py, __main__.py, cli.py, loader.py
+│   ├── config.py                # pydantic settings, YAML loader
+│   ├── model.py                 # Sequence / Genome dataclasses
+│   ├── palette.py               # karyotype-agnostic palette (D14)
 │   ├── io/
-│   │   ├── fai.py             # FAI parser
-│   │   ├── blast.py           # BLAST -outfmt 6 parser + filters
-│   │   └── manifest.py        # genomes.csv reader, cache manifest
-│   ├── model.py               # dataclasses / pydantic API models
+│   │   ├── fai.py, blast.py, manifest.py
 │   ├── store/
-│   │   ├── genome.py          # GenomeStore
-│   │   └── scm.py             # SCMStore (per-genome arrays, global index)
+│   │   ├── genome.py            # GenomeStore + palette assignment
+│   │   └── scm.py               # SCMStore + reference_seq_map cache
 │   ├── derive/
-│   │   ├── pair.py            # PairwiseSynteny merge join
-│   │   └── block.py           # SyntenyBlock collinear scan
-│   ├── cache.py               # PairCache (LRU + .npz)
-│   ├── api/
-│   │   ├── app.py             # FastAPI app factory
-│   │   ├── routes_genomes.py
-│   │   ├── routes_synteny.py
-│   │   ├── routes_overlay.py  # /highlight, /fish, /scm/{id}
-│   │   ├── routes_export.py
-│   │   ├── routes_config.py
-│   │   └── routes_stats.py
-│   └── precompute.py          # batch derivation entry point
+│   │   ├── pair.py              # PairwiseSCM merge join
+│   │   └── block.py             # SyntenyBlock strict-order scan (+ row-range for paint/align)
+│   ├── cache.py                 # PairCache (LRU; .npz deferred)
+│   └── api/
+│       ├── app.py, deps.py, schemas.py, regions.py, state.py
+│       ├── routes_genomes.py, routes_pairs.py, routes_scm.py
+│       ├── routes_synteny.py    # /synteny/{blocks,scms} with ?reference=
+│       ├── routes_paint.py      # /paint — block-based reference painting
+│       ├── routes_align.py      # /align — double-click alignment mapping
+│       └── routes_config.py     # GET/PUT block_detection
 ├── frontend/
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── tsconfig.json
-│   ├── index.html
+│   ├── package.json, vite.config.ts, tsconfig.json, svelte.config.js, index.html
 │   └── src/
-│       ├── main.ts
-│       ├── App.svelte
-│       ├── api/client.ts
-│       ├── state/             # Svelte runes / stores
-│       ├── canvas/
-│       │   ├── tracks.ts      # genome bars
-│       │   ├── connections.ts # ribbons + SCM lines
-│       │   ├── overlay.ts     # highlight + FISH
-│       │   └── lod.ts         # bp-per-px → mode
-│       ├── components/
-│       │   ├── Toolbar.svelte
-│       │   ├── GenomeList.svelte    # drag handles
-│       │   ├── FishPalette.svelte
-│       │   ├── BlockParams.svelte
-│       │   └── StatusBar.svelte
-│       └── lib/colors.ts      # karyotype palette
+│       ├── main.ts, App.svelte, app.css
+│       ├── api/client.ts, api/types.ts
+│       └── canvas/
+│           ├── coords.ts         # Viewport + bp↔px transforms
+│           ├── lod.ts            # bp-per-px → mode
+│           ├── hit_test.ts       # genomeIndexAt for scoped / dbl-click
+│           ├── colors.ts         # referenceColorMap + UNKNOWN_COLOR
+│           ├── alignment.ts      # alignmentDelta({anchor, target, xClick, …})
+│           ├── draw_tracks.ts    # painted + separator bars
+│           ├── draw_ribbons.ts   # Path2D-batched trapezoids
+│           ├── draw_scms.ts      # SCM lines at LOD-high
+│           └── format.ts
 └── tests/
     ├── conftest.py
-    ├── fixtures/
-    │   ├── tiny_a.fai
-    │   ├── tiny_a.blast_out
-    │   ├── tiny_b.fai
-    │   ├── tiny_b.blast_out
-    │   └── README.md          # how each fixture was constructed
     ├── unit/
-    │   ├── test_fai.py
-    │   ├── test_blast_filter.py
-    │   ├── test_uniqueness.py
-    │   ├── test_pair.py
-    │   ├── test_block.py
+    │   ├── test_fai.py, test_blast.py, test_manifest.py
+    │   ├── test_config.py, test_cli.py, test_regions.py
+    │   ├── test_palette.py, test_genome_store.py, test_scm_store.py
+    │   ├── test_pair.py, test_block.py
     │   └── test_cache.py
-    ├── api/
-    │   ├── test_genomes.py
-    │   ├── test_synteny.py
-    │   ├── test_highlight.py
-    │   └── test_fish.py
-    └── integration/           # marker: --integration
-        ├── test_load_pea.py
-        ├── test_pair_pea.py
-        └── test_perf_pea.py
+    └── api/
+        ├── conftest.py          # 3-genome synthetic AppState fixture
+        ├── test_genomes.py, test_pairs.py, test_synteny.py
+        ├── test_scm_lookup.py, test_config.py
+        ├── test_paint.py, test_align.py
+        └── (test_highlight.py, test_fish.py — Phase 3)
 ```
 
 ---
@@ -363,7 +355,8 @@ Order is dependency-driven; each task is small and independently testable.
 ### 5.5 Interaction ✅ (core) / ⏸ (debounce + cancellation)
 - [x] Mouse-wheel zoom centred on cursor (X axis only).
 - [x] Click-drag pan on empty canvas area.
-- [x] Genome reorder via HTML5 drag-and-drop on sidebar items; on drop, recompute adjacency, request newly adjacent pairs (spinner badge shown per pending pair).
+- [x] Genome reorder via HTML5 drag-and-drop on **per-track DOM handles** overlaid on the canvas (the label strip above each bar; `pointer-events: auto` only on the handle itself so pan / dblclick on the bar below are unaffected). *Note: originally planned as sidebar drag — moved to canvas per v0.1.2.*
+- [x] Sidebar repurposed as a visibility selector (checkboxes, `All` / `None` shortcuts, strike-through on unchecked).
 - [ ] Request debounce (200 ms) on adjacency changes. *(deferred — v0.2 polish)*
 - [ ] Request cancellation on rapid zoom: `AbortController` per pending fetch, cancel on next request. *(deferred — v0.2 polish; AbortSignal plumbing exists in the API client)*
 
@@ -423,9 +416,41 @@ Tests (additions):
 2. Reorder a genome: stale ribbons clear, new ribbons appear; first-time pair derive < 2 s, cached re-adjacency instant.
 3. Zoom from whole-genome to a 1 Mb window: smooth LOD transition, no dropped frames > 100 ms during steady zoom.
 
+### 5.8 v0.1.2 refinements — perf, alignment, sidebar redesign, dev workflow ✅
+
+Work that wasn't in the original plan but landed before moving on to Phase 3.
+
+**Rendering performance.** Painted-bar + ribbon cost at 1× on the 8-genome pea dataset was blocking smooth interaction.
+- [x] rAF-throttled pan — pointermove events coalesce into one viewport update per animation frame.
+- [x] Color-batched Canvas fills: one `Path2D` per colour (tracks), one per `(colour, opacity-bucket)` (ribbons). Cuts fill calls from ≫10⁴/frame to O(palette × 4).
+- [x] Pixel-aware LOD with clamp-to-1-px: sub-pixel blocks / paint regions no longer dropped (fixes the "sparse at 1×, dense at 4×+" bug) — they render as min-width columns that merge in their colour's Path2D, so cost stays flat.
+- [x] High-contrast chromosome separators (1 px dark + 1 px light + tick above/below) independent of bar colour.
+
+**Scope deltas (bug fix).** Full-replacement overrides froze scoped genomes out of global pan/zoom. Overrides are now `{ zoomFactor, centerDelta }` applied on top of `globalViewport`, so global changes propagate to every genome including overridden ones; the scoped offset rides on top.
+
+**Block-based paint.** `/api/paint` originally RLE'd every SCM transition on a genome; regions could be single-SCM-sized and didn't match ribbon aggregation. Now computed as the blocks of pair `(genome_id, reference)` projected onto the genome — paint and ribbons share `BlockParams` and re-aggregate together when `PUT /api/config` changes block params.
+
+**Double-click alignment.**
+- [x] `GET /api/align?genome_id=X&seq=S&pos=BP&k=3`: for every other genome, find the block containing `pos` (interpolate, confidence 1) or the top-K nearest blocks on the clicked chromosome (weight = `scm_count / (1 + distance_Mb)`, majority-vote on target seq, weighted-average of interpolated positions). 7 new tests.
+- [x] Frontend: `canvas/alignment.ts::alignmentDelta` turns a target syntenic bp into a `{ zoomFactor, centerDelta }` override so the target's bp-per-pixel matches the anchor and the syntenic bp lands at the click pixel. 4 vitest cases with `bpToPx(bpTarget, reconstructed_vp) == xClick` invariant.
+- [x] `ondblclick` on the track canvas → `api.align()` → rewrite `viewportOverrides` for every mapped target; anchor and `globalViewport` untouched.
+
+**Sidebar redesign.**
+- [x] Reorder moved from sidebar list to DOM handles overlaid above each canvas bar.
+- [x] Sidebar repurposed as a visibility selector (checkbox per genome; unchecked genomes drop out of `order` / display; sticky header with `All` / `None` + live count).
+- [x] Canvas no longer draws its own labels (handle provides them; avoids overdraw).
+
+**Dev workflow.**
+- [x] `.venv-hermit` (hermit-sandbox-managed via `./dev.sh setup`) / `.venv` (host-side, managed by you) kept strictly separate. `./dev.sh <cmd>` resolves whichever venv has a working Python at invocation time, so the same commands work inside and outside the hermit sandbox.
+
 ---
 
 ## 6. Phase 3 — Highlight & FISH
+
+**Scope note (updated post-v0.1.2).** Reference-propagated painting already delivers the default "FISH the reference genome's chromosomes onto all genomes" use case, and double-click alignment handles "move all genomes to this region" without needing click-highlight. Phase 3 is now about the *remaining* complementary behaviours:
+
+- `/api/highlight` — click-select a region on genome X; mark the individual SCMs (as ticks) that belong to that region across every other genome *without* moving their viewports. Complementary to alignment (which moves viewports but doesn't mark individual SCMs).
+- `/api/fish` — *user-defined custom* paint sets (arbitrary SCM ID list or a specific non-reference region becomes a stackable colour overlay on top of the reference painting). Lets users compose multiple coloured overlays for figure-making, independent of whichever genome is currently reference.
 
 ### 6.1 Backend
 - [ ] `POST /api/highlight` (design §4.2). Region → SCM IDs → cross-genome positions via `scm_to_genomes`.
@@ -458,28 +483,43 @@ Tests (additions):
 
 ## 8. Test strategy summary
 
+Current totals after v0.1.2: **181 backend** (pytest) + **38 frontend** (vitest). Ruff, mypy, svelte-check all clean.
+
 | Layer | Tool | What it covers |
 |---|---|---|
-| Pure functions (parsers, filters, block scan) | pytest with synthetic fixtures | Correctness on every branch of design §3.2.1 / §3.3 |
-| Stores & cache | pytest with `tmp_path` | LRU eviction, manifest invalidation, round-trip `.npz` |
-| API | pytest + `httpx.AsyncClient` | Schema, query parameters, error paths |
-| Integration | pytest `--integration` + real `example_data` | End-to-end load + 1–2 derived pairs; perf benchmarks |
-| Frontend logic | vitest | LOD math, palette assignment, debouncer, AbortController flow |
-| E2E (Phase 4) | Playwright | One scripted user flow |
+| Pure functions (parsers, filters, block scan, alignment math) | pytest with synthetic fixtures | Correctness on every branch of design §3.2.1 / §3.3 and v0.1.2 align algorithm |
+| Stores & cache | pytest with `tmp_path` | Universe build, CSR consistency, LRU eviction, `reference_seq_map` cache |
+| API | FastAPI `TestClient` via pytest | Schema, query parameters, error paths, reference / paint / align / config-PUT invariants |
+| Integration | pytest `--integration` + real `example_data` | End-to-end load + 1 derived pair + 1 block scan (~34 s for 8 pea genomes) |
+| Frontend logic | vitest | Coord transforms, LOD cutoff, hit-test, colour lookup, alignment delta round-trip |
+| E2E (Phase 4) | Playwright | One scripted user flow — still deferred |
 
-`tests/fixtures/` micro-data is hand-authored so every test asserts on **exact** known counts and IDs — no "looks reasonable" assertions in unit tests.
+Micro-fixtures are hand-authored so every test asserts on **exact** known counts and IDs — no "looks reasonable" assertions in unit tests.
 
 ---
 
 ## 9. Performance plan
 
-- **Loading:** polars reads `.blast_out` lazily; group-by-qseqid for uniqueness in polars (stays in Rust). Only the kept rows materialize into numpy.
-- **Pair derive:** numpy `intersect1d(..., return_indices=True)` over `scm_id_idx`. Avoid Python iteration entirely.
-- **Block scan:** vectorize the per-condition checks where possible, but keep the run-grouping in a Python loop — block count is ≤ ~50K so loop cost is fine.
-- **API serialization:** avoid pandas/polars `.to_dict()`; build dicts directly from numpy slices to skip per-row overhead.
-- **Caching:** PairCache keyed by `(g1, g2)` with `g1 < g2` normalization to dedupe symmetric requests.
-- **Frontend:** pre-bake ribbon Path2D objects per pair on first draw; redraw via `ctx.stroke(path)` — avoids re-issuing per-block draw calls during pan.
-- **Benchmarks:** `pytest-benchmark` regression gates for: full load, single-pair derive, block detect, `/api/highlight` round-trip on 1 Mb / 10 Mb / 50 Mb windows.
+Backend — implemented:
+- **Loading:** polars reads `.blast_out` with explicit schema; quality/uniqueness filters + strand normalisation stay in Rust; only kept rows materialize into numpy.
+- **Pair derive:** numpy `intersect1d(..., return_indices=True)` over `scm_id_idx`. No Python iteration.
+- **Block scan:** per-condition checks in a single Python loop — ≤ ~50 k blocks per pair, loop cost fine; block detection now also records `(scm_row_start, scm_row_end)` so paint / align can reuse the block decomposition without re-walking rows.
+- **Reference seq map:** one pass over `_hits_flat`, vectorised; cached per reference id so repeated `?reference=` queries are free.
+- **Caching:** `PairCache` keyed by ordered `(g1, g2)`. `g1 < g2` normalisation deferred — paint needs one direction, align needs the other.
+
+Backend — still pending:
+- **Benchmarks:** `pytest-benchmark` regression gates for full load, single-pair derive, block detect, `/api/align` and `/api/highlight` round-trips on 1 Mb / 10 Mb / 50 Mb windows. *(infra added but no gates yet)*
+- **Frontend-direct binary format:** `.to_dict()` avoidance; current responses build dicts from numpy slices, still JSON. Good enough so far.
+
+Frontend — implemented (v0.1.2):
+- **rAF-throttled pan** coalesces pointermove into one update per animation frame.
+- **Color-batched `Path2D`:** one path per colour (tracks), per `(colour, opacity bucket)` (ribbons). Cuts fill calls from ≫10⁴/frame to O(palette × ≤ 4) regardless of block count.
+- **Pixel-aware LOD clamp:** sub-pixel blocks / paint regions render as min 1 px columns, overlapping merges inside the same Path2D — low-zoom density matches what's visible at 4 ×+ without re-adding per-pixel-alias gaps.
+- **High-contrast separators** (1 px dark + 1 px light + tick) independent of bar colour.
+
+Frontend — pending:
+- Pre-bake per-pair ribbon Path2D on derive (avoid rebuild every pan frame). *Not yet needed — batching is fast enough on 8 pea genomes.*
+- Request debounce + `AbortController` cancellation on rapid zoom. *Deferred; AbortSignal plumbing already in the client.*
 
 ---
 
@@ -500,23 +540,34 @@ Tests (additions):
 v0.1 ships Phases 1 + 2 only (D16). Phases 3 and 4 are post-v0.1 and not started until v0.1 has been used against the real `example_data` for at least one round of feedback.
 
 ```
-v0.1 ───────────────────────────────────────────── ✅ SHIPPED
-  4.1 scaffold                    ✅
-    └ 4.2 io                      ✅
-        └ 4.3 stores              ✅
-            ├ 4.4 derive          ✅
-            │    └ 4.5 cache      ✅ (in-memory LRU; .npz → v0.2)
-            │         └ 4.6 api   ✅
-            └ 4.7 cli             ✅ (serve + lint-data; stats → v0.2)
-                                  └─> Phase 2 (frontend MVP)  ✅
+v0.1  ──────────────────────────────────────────── ✅ SHIPPED
+  Phase 1 backend + Phase 2 frontend core
+    scaffold → io → stores → derive → cache → api → CLI
+                                          └─> frontend MVP
 
-v0.2+ (post-feedback) ────────────────────────────── ⏸
-  Phase 3 (highlight + FISH)
-  Phase 4 (tuning UI, exports, precompute CLI, .npz cache,
-           request debouncing/cancellation, axis ticks, tooltips)
+v0.1.1 ──────────────────────────────────────────── ✅ SHIPPED (§5.7)
+  Reference-propagated colors
+    SCMStore.reference_seq_map · /synteny/* ?reference= · /api/paint
+    Ribbons + SCM lines + painted bars coloured via reference palette
+  Scoped zoom/pan (Shift + wheel/drag over a track)
+
+v0.1.2 ──────────────────────────────────────────── ✅ SHIPPED (§5.8)
+  Perf: rAF pan · Path2D color-batching · pixel-aware LOD clamp
+  Separators independent of bar colour
+  Scope *delta* model — global changes now propagate to overridden genomes
+  Block-based /api/paint — bars and ribbons re-aggregate in lockstep
+  Double-click alignment (/api/align + canvas/alignment.ts)
+  Sidebar → visibility selector; reorder moved to canvas DOM handles
+  dev.sh resolves .venv-hermit (inside) / .venv (outside) automatically
+
+v0.2+ ────────────────────────────────────────────── ⏸
+  Phase 3 (highlight + custom-FISH — scope reduced, see §6 note)
+  Phase 4 (block-param slider UI, /stats/blocks, exports, precompute CLI,
+           .npz cache, request debouncing/cancellation, axis ticks,
+           tooltips, filtering-stats UI, Playwright E2E)
 ```
 
-Strict dependencies are linear inside a phase. Phase 2 may start once §4.6 is stable; it does not need §4.7 (CLI). Phases 3 and 4 are independent of each other and can be picked up in either order after v0.1.
+Phases 3 and 4 are independent and can be picked up in either order.
 
 ---
 
