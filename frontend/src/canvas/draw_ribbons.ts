@@ -62,7 +62,7 @@ export function drawRibbons(
   canvasWidth: number,
   canvasHeight: number,
   referenceColorMap: Map<string, string>,
-  _baseOpacity = 0.45, // kept for API compatibility; opacity now driven by density buckets
+  fadeMultiplier = 1,
   layout: TrackLayout = DEFAULT_LAYOUT,
 ): void {
   ctx.clearRect(0, 0, canvasWidth, canvasHeight)
@@ -143,7 +143,7 @@ export function drawRibbons(
     const color = key.slice(0, sep)
     const bucketIdx = Number(key.slice(sep + 1))
     ctx.fillStyle = color
-    ctx.globalAlpha = OPACITY_BY_BUCKET[bucketIdx]
+    ctx.globalAlpha = OPACITY_BY_BUCKET[bucketIdx] * fadeMultiplier
     ctx.fill(path)
   }
   ctx.globalAlpha = 1

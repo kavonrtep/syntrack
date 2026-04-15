@@ -62,6 +62,7 @@ export function drawTracks(
   canvasHeight: number,
   paintByGenome: GenomePaintMap,
   referenceColorMap: Map<string, string>,
+  fadeMultiplier = 1,
   layout: TrackLayout = DEFAULT_LAYOUT,
 ): void {
   ctx.clearRect(0, 0, canvasWidth, canvasHeight)
@@ -139,11 +140,15 @@ export function drawTracks(
 
   // 1) One fill call per color across every track + region. This is where
   //    batching pays off: with ~12 palette colors + UNKNOWN_COLOR we issue
-  //    ~13 Canvas ops regardless of region count.
+  //    ~13 Canvas ops regardless of region count. Fade multiplier dims the
+  //    painted bars only — separators and labels stay at full contrast so
+  //    the structure remains legible under heavy fade.
+  ctx.globalAlpha = fadeMultiplier
   for (const [color, path] of colorPaths) {
     ctx.fillStyle = color
     ctx.fill(path)
   }
+  ctx.globalAlpha = 1
 
   // 2) Color-independent chromosome separators. 1 px dark + 1 px light
   //    side-by-side so the boundary reads on any background. Small ticks

@@ -27,12 +27,13 @@ export function drawScmLines(
   canvasWidth: number,
   canvasHeight: number,
   referenceColorMap: Map<string, string>,
+  fadeMultiplier = 1,
   baseOpacity = 0.55,
   layout: TrackLayout = DEFAULT_LAYOUT,
 ): void {
   ctx.clearRect(0, 0, canvasWidth, canvasHeight)
   ctx.lineWidth = 1
-  ctx.globalAlpha = baseOpacity
+  ctx.globalAlpha = baseOpacity * fadeMultiplier
 
   for (const pair of pairs) {
     if (!pair.scms || pair.scms.length === 0) continue

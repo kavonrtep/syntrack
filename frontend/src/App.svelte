@@ -107,6 +107,12 @@
   let highlightResult = $state<HighlightResponse | null>(null)
   let highlightDragging = $state(false)
 
+  // Fade slider: dims painted bars, ribbons and SCM lines so the highlight
+  // overlay stands out. 0 = normal, 0.9 = very faded. Does not affect the
+  // highlight overlay, chromosome separators, or genome / sequence labels.
+  let fadeLevel = $state(0)
+  let fadeMultiplier = $derived(1 - fadeLevel)
+
   // ----------------------------- Lifecycle -------------------------------
 
   onMount(async () => {
@@ -281,6 +287,7 @@
       canvasHeight,
       paintByGenome,
       refColorMap,
+      fadeMultiplier,
     )
   })
 
@@ -291,9 +298,25 @@
     const ctx = sizeAndContext(ribbonCanvas, canvasWidth, canvasHeight)
     if (!ctx) return
     if (lodModeValue === 'scm') {
-      drawScmLines(ctx, adjacentPairsScms, viewportFn, canvasWidth, canvasHeight, refColorMap)
+      drawScmLines(
+        ctx,
+        adjacentPairsScms,
+        viewportFn,
+        canvasWidth,
+        canvasHeight,
+        refColorMap,
+        fadeMultiplier,
+      )
     } else {
-      drawRibbons(ctx, adjacentPairs, viewportFn, canvasWidth, canvasHeight, refColorMap)
+      drawRibbons(
+        ctx,
+        adjacentPairs,
+        viewportFn,
+        canvasWidth,
+        canvasHeight,
+        refColorMap,
+        fadeMultiplier,
+      )
     }
   })
 
@@ -542,6 +565,24 @@
     highlightDragging = false
   }
 
+  function downloadHighlightScmIds(): void {
+    if (!highlightResult) return
+    const src = highlightResult.source
+    const ids = src.scm_ids
+    const blob = new Blob([ids.join('\n') + (ids.length ? '\n' : '')], {
+      type: 'text/plain;charset=utf-8',
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const safeSeq = src.seq.replace(/[^A-Za-z0-9._-]/g, '_')
+    a.download = `syntrack_${src.genome_id}_${safeSeq}_${src.start}-${src.end}_scm_ids.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   function onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape' && (highlightSelection || highlightResult)) {
       clearHighlight()
@@ -706,6 +747,17 @@
   >
     label = reorder · Shift = scope · dbl-click = align · Ctrl-drag = highlight
   </span>
+  <label class="fade-ctl" title="Dim the reference-palette coloring so the highlight overlay stands out. 0 = normal, slide right to fade.">
+    Fade
+    <input type="range" min="0" max="0.9" step="0.05" bind:value={fadeLevel} />
+  </label>
+  <button
+    onclick={downloadHighlightScmIds}
+    disabled={!highlightResult || highlightResult.source.scm_count === 0}
+    title="Download the SCM IDs inside the highlighted region as a plain-text file (one ID per line)."
+  >
+    ↓ SCM IDs
+  </button>
   <button onclick={resetView} disabled={!allGenomes}>Reset view</button>
 </header>
 
@@ -824,6 +876,20 @@
     font-size: 0.8em;
     margin-left: auto;
     cursor: help;
+  }
+
+  .fade-ctl {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    color: #aaa;
+    font-size: 0.85em;
+    user-select: none;
+  }
+
+  .fade-ctl input[type='range'] {
+    width: 100px;
+    accent-color: #4ab2e0;
   }
 
   main {

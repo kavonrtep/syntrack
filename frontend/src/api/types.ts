@@ -146,6 +146,7 @@ export type HighlightResponse = {
     start: number
     end: number
     scm_count: number
+    scm_ids: string[]
   }
   targets: HighlightTarget[]
 }

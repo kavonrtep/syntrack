@@ -51,15 +51,17 @@ def get_highlight(
     hits = state.scm_store.hits_in_region(genome_id, seq, start, end)
     scm_idxs = hits["scm_id_idx"]
 
+    universe = state.scm_store.universe
+    source_scm_ids = [universe[int(i)] for i in scm_idxs]
     source_schema = HighlightSourceSchema(
         genome_id=genome_id,
         seq=seq,
         start=start,
         end=end,
         scm_count=int(scm_idxs.size),
+        scm_ids=source_scm_ids,
     )
 
-    universe = state.scm_store.universe
     targets: list[HighlightTargetSchema] = []
     for target_id in state.scm_store.genome_ids:
         if target_id == genome_id:

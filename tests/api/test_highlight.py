@@ -26,13 +26,12 @@ def test_highlight_finds_shared_scms(client: TestClient) -> None:
         params={"genome_id": "A", "region": "chr1:400-700"},
     ).json()
     src = body["source"]
-    assert src == {
-        "genome_id": "A",
-        "seq": "chr1",
-        "start": 400,
-        "end": 700,
-        "scm_count": 3,
-    }
+    assert src["genome_id"] == "A"
+    assert src["seq"] == "chr1"
+    assert src["start"] == 400
+    assert src["end"] == 700
+    assert src["scm_count"] == 3
+    assert set(src["scm_ids"]) == {"OG05", "OG06", "OG07"}
 
     b = _target(body, "B")
     assert b["scm_count"] == 3
@@ -66,6 +65,7 @@ def test_highlight_empty_region(client: TestClient) -> None:
         params={"genome_id": "A", "region": "chr1:5000-6000"},
     ).json()
     assert body["source"]["scm_count"] == 0
+    assert body["source"]["scm_ids"] == []
     for t in body["targets"]:
         assert t["scm_count"] == 0
         assert t["positions"] == []
