@@ -89,9 +89,8 @@ export function drawTracks(
     const y = trackY(i, layout)
     const { startBp, endBp } = visibleRange(vp, g.total_length, canvasWidth)
 
-    // Genome label (drawn immediately — small, not worth batching).
-    ctx.fillStyle = '#ddd'
-    ctx.fillText(g.label, 8, y - 6)
+    // (Genome label is rendered by a DOM overlay handle in App.svelte so it
+    // doubles as the drag-to-reorder control. Nothing to draw on the canvas.)
 
     const painting = paintByGenome.get(g.id)
     const extents: SeqExtent[] = []

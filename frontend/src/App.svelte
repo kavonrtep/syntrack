@@ -25,6 +25,7 @@
     DEFAULT_LAYOUT,
     drawTracks,
     totalTrackedHeight,
+    trackY,
   } from './canvas/draw_tracks'
   import { drawRibbons, type AdjacentPair } from './canvas/draw_ribbons'
   import { drawScmLines, type AdjacentPairScms } from './canvas/draw_scms'
@@ -34,14 +35,15 @@
 
   // ----------------------------- State -----------------------------------
 
-  let genomes = $state<Genome[] | null>(null)
+  // `allGenomes` is the stable server-load order — used for the visibility
+  // sidebar. `order` is the *display* order of genomes that are currently
+  // checked on. Unchecking removes a genome from `order`; checking appends it
+  // at the end.
+  let allGenomes = $state<Genome[] | null>(null)
   let universeSize = $state(0)
   let order = $state<string[]>([])
+
   let globalViewport = $state<Viewport>(DEFAULT_VIEWPORT)
-  // Per-genome *deltas* applied on top of globalViewport. A genome's effective
-  // viewport is {global.zoom * zoomFactor, global.center + centerDelta}. Global
-  // changes propagate to every genome (including ones with overrides), which
-  // fixes the bug where a scoped genome was frozen out of global zoom/drag.
   type ScopeDelta = { zoomFactor: number; centerDelta: number }
   const viewportOverrides = new SvelteMap<string, ScopeDelta>()
   let error = $state<string | null>(null)
@@ -65,13 +67,10 @@
   let canvasWidth = $state(800)
   let canvasHeight = $state(600)
 
-  // Per-pair caches; keys are "g1|g2|reference" so reorder (→ new reference)
-  // re-derives colors correctly.
   const pairBlocks = new SvelteMap<string, BlocksResponse>()
   const loadingBlocks = new SvelteSet<string>()
   const pairScms = new SvelteMap<string, SCMsResponse>()
   const loadingScms = new SvelteSet<string>()
-  // Paint cache: key = "genome_id|reference"
   const paintByPair = new SvelteMap<string, PaintRegion[]>()
   const loadingPaint = new SvelteSet<string>()
   function pairKey(g1: string, g2: string, ref: string): string {
@@ -83,31 +82,26 @@
 
   // ----------------------------- Drag state ------------------------------
 
-  // If target is null, the drag moves the global viewport; otherwise it
-  // targets a specific genome's override (Shift + drag).
   let dragState = $state<{
     startX: number
     startCenter: number
     target: string | null
   } | null>(null)
 
-  // rAF throttle: pointermove fires at input-device rate; we coalesce into
-  // at most one viewport update per animation frame so the renderer never
-  // falls behind the cursor.
   let pendingPointer: { clientX: number } | null = null
   let pendingFrame: number | null = null
 
-  // Genome-reorder drag.
-  let dragFromIdx = $state<number | null>(null)
-  let dragOverIdx = $state<number | null>(null)
+  // Track-handle reorder drag (HTML5 DnD on the DOM handle overlay).
+  let reorderFromIdx = $state<number | null>(null)
+  let reorderOverIdx = $state<number | null>(null)
 
   // ----------------------------- Lifecycle -------------------------------
 
   onMount(async () => {
     try {
       const [genomeResp, cfgResp] = await Promise.all([api.genomes(), api.config()])
-      genomes = genomeResp.genomes
-      order = genomeResp.genomes.map((g) => g.id)
+      allGenomes = genomeResp.genomes
+      order = genomeResp.genomes.map((g) => g.id) // all visible initially
       universeSize = genomeResp.scm_universe_size
       config = cfgResp
     } catch (err) {
@@ -141,21 +135,18 @@
   }
 
   let genomesInOrder = $derived.by<Genome[]>(() => {
-    if (!genomes) return []
-    const byId = new Map(genomes.map((g) => [g.id, g]))
+    if (!allGenomes) return []
+    const byId = new Map(allGenomes.map((g) => [g.id, g]))
     return order
       .map((id) => byId.get(id))
       .filter((g): g is Genome => g !== undefined)
   })
 
-  // The reference is always the top genome in current order (design §5.7).
   let referenceGenome = $derived<Genome | null>(genomesInOrder[0] ?? null)
   let refColorMap = $derived<Map<string, string>>(
     referenceGenome ? referenceColorMap(referenceGenome) : new Map(),
   )
 
-  // LOD: blocks at low zoom, SCM lines at high zoom. Anchor on the top genome's
-  // effective viewport (global, or its own override if one is set).
   let lodModeValue = $derived.by<'block' | 'scm'>(() => {
     if (genomesInOrder.length === 0 || canvasWidth < 2) return 'block'
     const top = genomesInOrder[0]
@@ -200,7 +191,6 @@
     return out
   })
 
-  // Fetch blocks for any adjacent pair we haven't seen yet (always — LOD-low default).
   $effect(() => {
     const ref = referenceGenome?.id
     if (!ref) return
@@ -219,7 +209,6 @@
     }
   })
 
-  // Fetch SCMs only when LOD switches to scm mode.
   $effect(() => {
     if (lodModeValue !== 'scm') return
     const ref = referenceGenome?.id
@@ -239,7 +228,6 @@
     }
   })
 
-  // Fetch reference painting for every genome in order.
   $effect(() => {
     const ref = referenceGenome?.id
     if (!ref) return
@@ -267,11 +255,8 @@
     return map
   })
 
-  // Track canvas redraws. Depend on viewportOverrides.size + globalViewport so
-  // any viewport change triggers a redraw.
   $effect(() => {
-    if (!trackCanvas || !genomes || canvasWidth < 2 || canvasHeight < 2) return
-    // touch reactive state so overrides changes trigger this effect
+    if (!trackCanvas || !allGenomes || canvasWidth < 2 || canvasHeight < 2) return
     void viewportOverrides.size
     void globalViewport
     const ctx = sizeAndContext(trackCanvas, canvasWidth, canvasHeight)
@@ -287,7 +272,6 @@
     )
   })
 
-  // Connection canvas: ribbons (LOD-low) or SCM lines (LOD-high).
   $effect(() => {
     if (!ribbonCanvas || canvasWidth < 2 || canvasHeight < 2) return
     void viewportOverrides.size
@@ -301,9 +285,31 @@
     }
   })
 
+  // ----------------------------- Visibility (sidebar) --------------------
+
+  function isVisible(id: string): boolean {
+    return order.includes(id)
+  }
+
+  function toggleVisible(id: string) {
+    if (order.includes(id)) {
+      order = order.filter((x) => x !== id)
+    } else {
+      order = [...order, id]
+    }
+  }
+
+  function selectAll() {
+    if (!allGenomes) return
+    order = allGenomes.map((g) => g.id)
+  }
+
+  function selectNone() {
+    order = []
+  }
+
   // ----------------------------- Interaction -----------------------------
 
-  /** Which genome is the pointer over (or null if not over a track). */
   function pointerGenomeId(clientY: number): string | null {
     if (!trackCanvas) return null
     const rect = trackCanvas.getBoundingClientRect()
@@ -318,14 +324,10 @@
     const rect = trackCanvas.getBoundingClientRect()
     const cursorFraction = (e.clientX - rect.left) / rect.width
     const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25
-
-    // Shift + wheel over a genome row → scoped zoom for that genome.
     const scoped = e.shiftKey ? pointerGenomeId(e.clientY) : null
     if (scoped) {
       const current = effectiveViewport(scoped)
       const next = zoomAtFraction(current, cursorFraction, factor)
-      // Derive the new delta so this override stays consistent with whatever
-      // the global viewport is right now.
       viewportOverrides.set(scoped, {
         zoomFactor: next.zoom / globalViewport.zoom,
         centerDelta: next.center - globalViewport.center,
@@ -349,8 +351,6 @@
     const dx = clientX - dragState.startX
     const fraction = dx / canvasWidth
     if (dragState.target) {
-      // Pan at the current effective zoom of the target; translate the new
-      // effective center back into a delta from the (possibly moving) global.
       const cur = effectiveViewport(dragState.target)
       const next = panByFraction({ zoom: cur.zoom, center: dragState.startCenter }, fraction)
       const prev = viewportOverrides.get(dragState.target)
@@ -379,7 +379,6 @@
   }
 
   function onPointerUp(_e: PointerEvent) {
-    // Flush any coalesced pointer update synchronously so the final position sticks.
     if (pendingFrame !== null) {
       cancelAnimationFrame(pendingFrame)
       pendingFrame = null
@@ -396,9 +395,6 @@
     viewportOverrides.clear()
   }
 
-  // Double-click alignment: anchor genome stays fixed; every other genome's
-  // override is rewritten so its syntenic bp lands at the same pixel as the
-  // clicked one, at the anchor's basewise resolution.
   let lastAlignmentSummary = $state<string | null>(null)
 
   async function onDoubleClick(e: MouseEvent) {
@@ -414,7 +410,6 @@
     const anchorVp = effectiveViewport(anchor.id)
     const bpGlobal = pxToBp(cx, anchorVp, anchor.total_length, canvasWidth)
     const clamped = Math.max(0, Math.min(anchor.total_length - 1, bpGlobal))
-    // Find which sequence contains the clamped bp.
     let clickedSeq = anchor.sequences[anchor.sequences.length - 1]
     for (const s of anchor.sequences) {
       if (clamped >= s.offset && clamped < s.offset + s.length) {
@@ -465,30 +460,32 @@
       (missed > 0 ? ` (${aligned}/${total} genomes)` : '')
   }
 
-  // Reorder handlers (HTML5 drag/drop).
-  function onRowDragStart(e: DragEvent, idx: number) {
-    dragFromIdx = idx
+  // ----------------------------- Track-handle reorder --------------------
+
+  function onHandleDragStart(e: DragEvent, i: number) {
+    reorderFromIdx = i
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move'
-      e.dataTransfer.setData('text/plain', String(idx))
+      e.dataTransfer.setData('text/plain', String(i))
     }
   }
 
-  function onRowDragOver(e: DragEvent, idx: number) {
+  function onHandleDragOver(e: DragEvent, i: number) {
+    if (reorderFromIdx === null) return
     e.preventDefault()
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
-    dragOverIdx = idx
+    reorderOverIdx = i
   }
 
-  function onRowDragLeave(idx: number) {
-    if (dragOverIdx === idx) dragOverIdx = null
+  function onHandleDragLeave(i: number) {
+    if (reorderOverIdx === i) reorderOverIdx = null
   }
 
-  function onRowDrop(e: DragEvent, toIdx: number) {
+  function onHandleDrop(e: DragEvent, toIdx: number) {
     e.preventDefault()
-    const fromIdx = dragFromIdx
-    dragFromIdx = null
-    dragOverIdx = null
+    const fromIdx = reorderFromIdx
+    reorderFromIdx = null
+    reorderOverIdx = null
     if (fromIdx === null || fromIdx === toIdx) return
     const next = [...order]
     const [moved] = next.splice(fromIdx, 1)
@@ -496,21 +493,16 @@
     order = next
   }
 
-  function onRowDragEnd() {
-    dragFromIdx = null
-    dragOverIdx = null
-  }
-
-  function genomeById(gid: string): Genome | undefined {
-    return genomes?.find((g) => g.id === gid)
+  function onHandleDragEnd() {
+    reorderFromIdx = null
+    reorderOverIdx = null
   }
 
   // ----------------------------- Status helpers --------------------------
 
   let statusLine = $derived.by(() => {
-    if (!genomes || genomes.length === 0) return ''
-    const byId = new Map(genomes.map((g) => [g.id, g]))
-    const anchor = byId.get(order[0]) ?? genomes[0]
+    if (!allGenomes || genomesInOrder.length === 0) return 'no genomes selected'
+    const anchor = genomesInOrder[0]
     const vp = effectiveViewport(anchor.id)
     const { startBp, endBp } = visibleRange(vp, anchor.total_length, canvasWidth)
     const ppb = pixelsPerBp(vp, anchor.total_length, canvasWidth)
@@ -525,48 +517,54 @@
   })
 
   let canvasContentHeight = $derived(
-    genomes ? totalTrackedHeight(genomes.length, DEFAULT_LAYOUT) : 0,
+    genomesInOrder.length
+      ? totalTrackedHeight(genomesInOrder.length, DEFAULT_LAYOUT)
+      : 0,
   )
+
+  const HANDLE_HEIGHT = 18 // DOM overlay strip sitting above each bar
 </script>
 
 <header>
   <h1>SynTrack</h1>
-  {#if genomes}
-    <span class="meta"
-      >{genomes.length} genomes · {universeSize.toLocaleString()} SCMs</span
-    >
+  {#if allGenomes}
+    <span class="meta">
+      {genomesInOrder.length}/{allGenomes.length} genomes · {universeSize.toLocaleString()} SCMs
+    </span>
   {/if}
-  <span class="hint" title="Shift + wheel/drag over a genome row: scope the action to that genome. Double-click on any track to vertically align the other genomes to the clicked region.">Shift = scope · dbl-click = align</span>
-  <button onclick={resetView} disabled={!genomes}>Reset view</button>
+  <span
+    class="hint"
+    title="Drag the label above any track to reorder genomes. Shift + wheel/drag over a bar: scope that genome. Double-click a bar: vertical alignment."
+  >
+    drag label = reorder · Shift = scope · dbl-click = align
+  </span>
+  <button onclick={resetView} disabled={!allGenomes}>Reset view</button>
 </header>
 
 <main>
   {#if error}
     <div class="error">{error}</div>
-  {:else if genomes === null}
+  {:else if allGenomes === null}
     <p class="loading">Loading genomes…</p>
   {:else}
-    <aside class="sidebar" role="list" aria-label="Genome order">
-      {#each order as gid, i (gid)}
-        {@const g = genomeById(gid)}
-        {#if g}
-          <div
-            class="genome-row"
-            class:dragging={dragFromIdx === i}
-            class:drop-target={dragOverIdx === i && dragFromIdx !== i}
-            role="listitem"
-            draggable="true"
-            ondragstart={(e) => onRowDragStart(e, i)}
-            ondragover={(e) => onRowDragOver(e, i)}
-            ondragleave={() => onRowDragLeave(i)}
-            ondrop={(e) => onRowDrop(e, i)}
-            ondragend={onRowDragEnd}
-          >
-            <span class="handle" aria-hidden="true">≡</span>
-            <span class="row-label">{g.label}</span>
-            <span class="row-meta">{g.scm_count.toLocaleString()}</span>
-          </div>
-        {/if}
+    <aside class="sidebar" aria-label="Genome visibility">
+      <div class="sidebar-head">
+        <span class="sidebar-title">Genomes</span>
+        <div class="sidebar-actions">
+          <button onclick={selectAll} disabled={order.length === allGenomes.length}>All</button>
+          <button onclick={selectNone} disabled={order.length === 0}>None</button>
+        </div>
+      </div>
+      {#each allGenomes as g (g.id)}
+        <label class="genome-toggle" class:hidden={!isVisible(g.id)}>
+          <input
+            type="checkbox"
+            checked={isVisible(g.id)}
+            onchange={() => toggleVisible(g.id)}
+          />
+          <span class="toggle-label">{g.label}</span>
+          <span class="toggle-meta">{g.scm_count.toLocaleString()}</span>
+        </label>
       {/each}
     </aside>
 
@@ -589,6 +587,33 @@
       >
         <canvas bind:this={ribbonCanvas} class="layer ribbons"></canvas>
         <canvas bind:this={trackCanvas} class="layer tracks"></canvas>
+
+        <!-- Track-handle overlay: one drag-handle strip per visible genome,
+             sitting directly above its bar. Pointer-events isolated to the
+             handle itself so panning/dblclick on the bar below are unaffected. -->
+        <div class="handles-layer">
+          {#each genomesInOrder as g, i (g.id)}
+            <div
+              class="track-handle"
+              class:dragging={reorderFromIdx === i}
+              class:drop-target={reorderOverIdx === i && reorderFromIdx !== i}
+              style:top={`${trackY(i, DEFAULT_LAYOUT) - HANDLE_HEIGHT}px`}
+              style:height={`${HANDLE_HEIGHT}px`}
+              draggable="true"
+              role="button"
+              tabindex="0"
+              aria-label={`reorder ${g.label}`}
+              ondragstart={(e) => onHandleDragStart(e, i)}
+              ondragover={(e) => onHandleDragOver(e, i)}
+              ondragleave={() => onHandleDragLeave(i)}
+              ondrop={(e) => onHandleDrop(e, i)}
+              ondragend={onHandleDragEnd}
+            >
+              <span class="grip" aria-hidden="true">≡</span>
+              <span class="handle-label">{g.label}</span>
+            </div>
+          {/each}
+        </div>
       </div>
       {#if loadingBlocks.size + loadingScms.size + loadingPaint.size > 0}
         {@const total = loadingBlocks.size + loadingScms.size + loadingPaint.size}
@@ -640,50 +665,75 @@
   }
 
   .sidebar {
-    flex: 0 0 220px;
+    flex: 0 0 240px;
     border-right: 1px solid #333;
     background: #1f1f1f;
     overflow-y: auto;
-    padding: 0.4em 0;
+    display: flex;
+    flex-direction: column;
   }
 
-  .genome-row {
+  .sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5em 0.8em;
+    border-bottom: 1px solid #2a2a2a;
+    position: sticky;
+    top: 0;
+    background: #1f1f1f;
+    z-index: 1;
+  }
+
+  .sidebar-title {
+    color: #ccc;
+    font-weight: 500;
+    font-size: 0.9em;
+  }
+
+  .sidebar-actions {
+    display: flex;
+    gap: 0.3em;
+  }
+
+  .sidebar-actions button {
+    font-size: 0.75em;
+    padding: 0.2em 0.6em;
+  }
+
+  .genome-toggle {
     display: flex;
     align-items: center;
     gap: 0.5em;
-    padding: 0.4em 0.6em;
-    cursor: grab;
+    padding: 0.4em 0.8em;
     border-bottom: 1px solid #2a2a2a;
+    cursor: pointer;
     user-select: none;
   }
 
-  .genome-row:hover {
+  .genome-toggle:hover {
     background: #2a2a2a;
   }
 
-  .genome-row.dragging {
-    opacity: 0.4;
-    cursor: grabbing;
+  .genome-toggle.hidden .toggle-label,
+  .genome-toggle.hidden .toggle-meta {
+    color: #555;
+    text-decoration: line-through;
   }
 
-  .genome-row.drop-target {
-    background: #1f3a4a;
-    box-shadow: inset 0 -2px 0 #4ab2e0;
+  .genome-toggle input[type='checkbox'] {
+    margin: 0;
+    accent-color: #4ab2e0;
   }
 
-  .handle {
-    color: #777;
-    font-size: 0.95em;
-  }
-
-  .row-label {
+  .toggle-label {
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .row-meta {
+  .toggle-meta {
     color: #888;
     font-size: 0.8em;
     font-variant-numeric: tabular-nums;
@@ -701,6 +751,7 @@
     overflow-x: hidden;
     user-select: none;
     touch-action: none;
+    position: relative;
   }
 
   .canvas-stack {
@@ -717,13 +768,67 @@
   }
 
   .ribbons {
-    /* drawn first; tracks on top to mask the strip behind genome bars */
     z-index: 1;
   }
 
   .tracks {
     z-index: 2;
     pointer-events: none;
+  }
+
+  .handles-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  .track-handle {
+    position: absolute;
+    left: 8px;
+    min-width: 160px;
+    max-width: 320px;
+    padding: 1px 8px;
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    background: rgba(32, 32, 32, 0.82);
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    color: #ddd;
+    font-size: 11px;
+    cursor: grab;
+    pointer-events: auto;
+    user-select: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .track-handle:hover {
+    background: rgba(45, 45, 45, 0.95);
+    border-color: #555;
+  }
+
+  .track-handle.dragging {
+    opacity: 0.5;
+    cursor: grabbing;
+  }
+
+  .track-handle.drop-target {
+    background: rgba(31, 58, 74, 0.95);
+    border-color: #4ab2e0;
+    box-shadow: 0 0 0 2px rgba(74, 178, 224, 0.4);
+  }
+
+  .grip {
+    color: #888;
+    font-size: 12px;
+  }
+
+  .handle-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .badge {
