@@ -127,6 +127,29 @@ class SCMResponse(_Schema):
     positions: list[SCMPositionSchema]
 
 
+# ------------------------------ /api/align --------------------------------
+
+
+class AlignmentSourceSchema(_Schema):
+    genome_id: str
+    seq: str
+    pos: int
+
+
+class AlignmentMappingSchema(_Schema):
+    genome_id: str
+    seq: str | None
+    """Target sequence name, or ``null`` if no blocks map ``seq`` to this genome."""
+    pos: int | None
+    confidence: float
+    """1.0 when the clicked bp falls inside a block; decays with distance otherwise."""
+
+
+class AlignmentResponse(_Schema):
+    source: AlignmentSourceSchema
+    mappings: list[AlignmentMappingSchema]
+
+
 # ------------------------------ /api/paint --------------------------------
 
 

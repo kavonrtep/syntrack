@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from syntrack.api.routes_align import router as align_router
 from syntrack.api.routes_config import router as config_router
 from syntrack.api.routes_genomes import router as genomes_router
 from syntrack.api.routes_paint import router as paint_router
@@ -42,6 +43,7 @@ def create_app(state: AppState, *, dev_cors: bool = False) -> FastAPI:
     app.include_router(synteny_router, prefix="/api")
     app.include_router(scm_router, prefix="/api")
     app.include_router(paint_router, prefix="/api")
+    app.include_router(align_router, prefix="/api")
     app.include_router(config_router, prefix="/api")
 
     return app
