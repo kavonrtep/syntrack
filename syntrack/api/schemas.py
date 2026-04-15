@@ -72,6 +72,10 @@ class SyntenyBlockSchema(_Schema):
     g2_end: int
     strand: str = Field(pattern=r"^[+-]$")
     scm_count: int
+    reference_seq: str | None = None
+    """Dominant sequence name in the reference genome among this block's SCMs.
+    ``null`` if no ``reference`` query param was given, or no SCM in this block
+    is present in the reference genome."""
 
 
 class BlocksResponse(_Schema):
@@ -93,6 +97,9 @@ class PairwiseSCMSchema(_Schema):
     g2_start: int
     g2_end: int
     strand: str = Field(pattern=r"^[+-]$")
+    reference_seq: str | None = None
+    """Sequence in the reference genome that contains this SCM, or ``null`` if the
+    SCM is absent from the reference / no ``reference`` query param was given."""
 
 
 class SCMsResponse(_Schema):

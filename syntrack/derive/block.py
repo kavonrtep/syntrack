@@ -27,6 +27,9 @@ class SyntenyBlock:
 
     Coordinates are 0-based half-open and local to their respective sequences.
     ``relative_strand`` is +1 for parallel ribbons, -1 for crossed ribbons.
+    ``scm_row_start``/``scm_row_end`` index into the parent :class:`PairwiseSCM`'s
+    ``rows`` (half-open) so downstream code can look the block's SCMs up — used
+    e.g. by the reference-color API layer.
     """
 
     block_id: int
@@ -38,6 +41,8 @@ class SyntenyBlock:
     g2_end: int
     relative_strand: int
     scm_count: int
+    scm_row_start: int
+    scm_row_end: int
 
 
 def detect_blocks(pair: PairwiseSCM, params: BlockParams) -> list[SyntenyBlock]:  # noqa: PLR0915
@@ -89,6 +94,8 @@ def detect_blocks(pair: PairwiseSCM, params: BlockParams) -> list[SyntenyBlock]:
                     g2_end=cur_g2_end,
                     relative_strand=cur_strand,
                     scm_count=size,
+                    scm_row_start=cur_first_idx,
+                    scm_row_end=end_idx_exclusive,
                 )
             )
 

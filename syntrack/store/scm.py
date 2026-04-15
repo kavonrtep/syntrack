@@ -60,6 +60,7 @@ class SCMStore:
         "_genome_store",
         "_hits_flat",
         "_hits_offsets",
+        "_ref_seq_map_cache",
         "filtering_stats",
         "genome_id_to_idx",
         "genome_ids",
@@ -98,6 +99,7 @@ class SCMStore:
         self._hits_offsets = hits_offsets
         self._hits_flat = hits_flat
         self._genome_store = genome_store
+        self._ref_seq_map_cache: dict[str, np.ndarray] = {}
 
     # ------------------------------ Properties ------------------------------
 
@@ -157,6 +159,28 @@ class SCMStore:
         a = self.genome_positions[g1_id]["scm_id_idx"]
         b = self.genome_positions[g2_id]["scm_id_idx"]
         return int(np.intersect1d(a, b, assume_unique=True).size)
+
+    def reference_seq_map(self, ref_genome_id: str) -> np.ndarray:
+        """Return an ``int32`` vector of shape ``(universe_size,)``.
+
+        ``out[scm_id_idx]`` is the sequence index (into ``reference_genome.sequences``)
+        on which that SCM lands in the reference genome, or ``-1`` if the SCM is not
+        present in the reference. Cached per reference id.
+        """
+        cached = self._ref_seq_map_cache.get(ref_genome_id)
+        if cached is not None:
+            return cached
+        if ref_genome_id not in self.genome_id_to_idx:
+            raise KeyError(ref_genome_id)
+        ref_idx = self.genome_id_to_idx[ref_genome_id]
+        mask = self._hits_flat["genome_idx"] == ref_idx
+        ref_hits = self._hits_flat[mask]
+        out = np.full(self.universe_size, -1, dtype=np.int32)
+        if ref_hits.size > 0:
+            out[ref_hits["scm_id_idx"]] = ref_hits["seq_idx"]
+        out.flags.writeable = False  # treat as immutable once cached
+        self._ref_seq_map_cache[ref_genome_id] = out
+        return out
 
     def iter_genomes(self) -> Iterator[str]:
         return iter(self.genome_ids)

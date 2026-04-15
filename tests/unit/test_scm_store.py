@@ -217,6 +217,63 @@ def test_filtering_stats_recorded(two_genome_setup: tuple[list[GenomeEntry], Gen
     assert store.filtering_stats["A"].after_validation == 3
 
 
+def test_reference_seq_map_present_and_absent(
+    two_genome_setup: tuple[list[GenomeEntry], GenomeStore],
+) -> None:
+    entries, gs = two_genome_setup
+    store = SCMStore.load(entries, TEST_PARAMS, gs)
+
+    ref_map = store.reference_seq_map("A")
+    # A has OG1, OG2, OG3 — all on seq idx 0 (chr1). OG4 is absent from A → -1.
+    og1_idx = store.universe_index["OG1"]
+    og4_idx = store.universe_index["OG4"]
+    assert int(ref_map[og1_idx]) == 0
+    assert int(ref_map[og4_idx]) == -1
+
+
+def test_reference_seq_map_is_cached(
+    two_genome_setup: tuple[list[GenomeEntry], GenomeStore],
+) -> None:
+    entries, gs = two_genome_setup
+    store = SCMStore.load(entries, TEST_PARAMS, gs)
+    first = store.reference_seq_map("A")
+    second = store.reference_seq_map("A")
+    assert first is second  # same object returned on second call
+
+
+def test_reference_seq_map_unknown_genome_raises(
+    two_genome_setup: tuple[list[GenomeEntry], GenomeStore],
+) -> None:
+    entries, gs = two_genome_setup
+    store = SCMStore.load(entries, TEST_PARAMS, gs)
+    with pytest.raises(KeyError):
+        store.reference_seq_map("ghost")
+
+
+def test_reference_seq_map_respects_multi_sequence_genome(tmp_path: Path) -> None:
+    """An SCM landing on chr2 in the reference should return seq_idx=1."""
+    entries = [
+        _make_genome(
+            tmp_path,
+            "A",
+            [("chr1", 1000), ("chr2", 1000)],
+            [
+                _blast_row("OG1", "chr1", 100, 199),
+                _blast_row("OG2", "chr2", 100, 199),
+            ],
+        ),
+        _make_genome(
+            tmp_path, "B", [("chr1", 1000)],
+            [_blast_row("OG1", "chr1", 100, 199), _blast_row("OG2", "chr1", 500, 599)],
+        ),
+    ]
+    gs = GenomeStore.load(entries, PaletteCfg())
+    store = SCMStore.load(entries, TEST_PARAMS, gs)
+    ref_map = store.reference_seq_map("A")
+    assert int(ref_map[store.universe_index["OG1"]]) == 0  # chr1
+    assert int(ref_map[store.universe_index["OG2"]]) == 1  # chr2
+
+
 def test_genome_with_no_kept_scms(tmp_path: Path) -> None:
     """A genome whose BLAST is filtered to zero rows should still load cleanly."""
     entries = [

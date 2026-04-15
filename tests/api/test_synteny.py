@@ -104,3 +104,57 @@ def test_scms_strand_field(client: TestClient) -> None:
     body = client.get("/api/synteny/scms", params={"g1": "A", "g2": "B"}).json()
     for s in body["scms"]:
         assert s["strand"] in ("+", "-")
+
+
+# ------------------------------ reference= param ------------------------
+
+
+def test_blocks_reference_none_by_default(client: TestClient) -> None:
+    """Without ?reference, blocks report reference_seq = null."""
+    body = client.get("/api/synteny/blocks", params={"g1": "A", "g2": "B"}).json()
+    assert body["block_count"] >= 1
+    assert all(b["reference_seq"] is None for b in body["blocks"])
+
+
+def test_blocks_reference_populated(client: TestClient) -> None:
+    """With ?reference=A, the A/B blocks get a reference_seq name (A's chr1)."""
+    body = client.get(
+        "/api/synteny/blocks",
+        params={"g1": "A", "g2": "B", "reference": "A"},
+    ).json()
+    assert body["block_count"] >= 1
+    for b in body["blocks"]:
+        assert b["reference_seq"] == "chr1"  # synthetic fixture has a single chr1
+
+
+def test_blocks_reference_unknown_404(client: TestClient) -> None:
+    r = client.get(
+        "/api/synteny/blocks",
+        params={"g1": "A", "g2": "B", "reference": "NOPE"},
+    )
+    assert r.status_code == 404
+
+
+def test_scms_reference_populated(client: TestClient) -> None:
+    body = client.get(
+        "/api/synteny/scms",
+        params={"g1": "A", "g2": "B", "reference": "A"},
+    ).json()
+    assert body["returned"] > 0
+    for s in body["scms"]:
+        # Shared SCMs between A and B are OG01..OG08, all on A's chr1.
+        assert s["reference_seq"] == "chr1"
+
+
+def test_scms_reference_absent_returns_null(client: TestClient) -> None:
+    """Using a reference that's missing some shared SCMs produces null fields."""
+    # Shared SCMs between B and C are OG05..OG08 plus OG11/OG12.
+    # Reference = A has OG05..OG08 but NOT OG11/OG12 → mix of strings and null.
+    body = client.get(
+        "/api/synteny/scms",
+        params={"g1": "B", "g2": "C", "reference": "A"},
+    ).json()
+    ref_values = {s["reference_seq"] for s in body["scms"]}
+    # Expect both "chr1" (from A) and None for SCMs absent from A.
+    assert "chr1" in ref_values
+    assert None in ref_values
