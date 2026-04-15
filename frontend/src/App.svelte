@@ -81,6 +81,12 @@
     target: string | null
   } | null>(null)
 
+  // rAF throttle: pointermove fires at input-device rate; we coalesce into
+  // at most one viewport update per animation frame so the renderer never
+  // falls behind the cursor.
+  let pendingPointer: { clientX: number } | null = null
+  let pendingFrame: number | null = null
+
   // Genome-reorder drag.
   let dragFromIdx = $state<number | null>(null)
   let dragOverIdx = $state<number | null>(null)
@@ -322,9 +328,9 @@
     ;(e.target as Element).setPointerCapture(e.pointerId)
   }
 
-  function onPointerMove(e: PointerEvent) {
+  function applyDragFromPointer(clientX: number): void {
     if (!dragState) return
-    const dx = e.clientX - dragState.startX
+    const dx = clientX - dragState.startX
     const fraction = dx / canvasWidth
     if (dragState.target) {
       const cur = effectiveViewport(dragState.target)
@@ -340,7 +346,28 @@
     }
   }
 
+  function onPointerMove(e: PointerEvent) {
+    if (!dragState) return
+    pendingPointer = { clientX: e.clientX }
+    if (pendingFrame !== null) return
+    pendingFrame = requestAnimationFrame(() => {
+      pendingFrame = null
+      const pending = pendingPointer
+      pendingPointer = null
+      if (pending) applyDragFromPointer(pending.clientX)
+    })
+  }
+
   function onPointerUp(_e: PointerEvent) {
+    // Flush any coalesced pointer update synchronously so the final position sticks.
+    if (pendingFrame !== null) {
+      cancelAnimationFrame(pendingFrame)
+      pendingFrame = null
+    }
+    if (pendingPointer) {
+      applyDragFromPointer(pendingPointer.clientX)
+      pendingPointer = null
+    }
     dragState = null
   }
 

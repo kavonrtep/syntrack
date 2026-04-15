@@ -1,7 +1,12 @@
 // Track-canvas renderer: one horizontal bar per genome. When reference-paint
 // data is provided, bars are filled by painted regions (reference-color per
 // run of SCMs, design §5.7). Without paint data, bars fall back to the
-// genome's own per-sequence palette — useful while paint data is loading.
+// genome's own per-sequence palette.
+//
+// Performance: all rectangle fills are batched into one Path2D per color,
+// then flushed with a single fill() per color. Paint regions narrower than
+// one pixel are dropped (pixel-aware LOD) — they'd be indistinguishable
+// anyway.
 
 import type { Genome, PaintRegion } from '../api/types'
 import { UNKNOWN_COLOR, colorFor } from './colors'
@@ -16,7 +21,7 @@ export type TrackLayout = {
 
 export const DEFAULT_LAYOUT: TrackLayout = {
   trackHeight: 22,
-  trackGap: 80, // vertical room between tracks (where ribbons land)
+  trackGap: 80,
   topPad: 28,
   labelHeight: 14,
 }
@@ -32,8 +37,22 @@ export function totalTrackedHeight(nGenomes: number, layout: TrackLayout): numbe
 }
 
 export type GenomePaintMap = Map<string, PaintRegion[]>
-
 export type ViewportFn = (genomeId: string) => Viewport
+
+// Visible extent of one sequence within one track — carried through from the
+// fill pass to the separator + label passes so we don't recompute.
+type SeqExtent = {
+  name: string
+  x0: number
+  x1: number
+  y: number
+}
+
+const SEP_TICK = 4
+const SEP_DARK = 'rgba(0, 0, 0, 0.85)'
+const SEP_LIGHT = 'rgba(255, 255, 255, 0.75)'
+const LABEL_FILL = 'rgba(255, 255, 255, 0.95)'
+const LABEL_STROKE = 'rgba(0, 0, 0, 0.6)'
 
 export function drawTracks(
   ctx: CanvasRenderingContext2D,
@@ -49,120 +68,127 @@ export function drawTracks(
   ctx.font = '11px system-ui, sans-serif'
   ctx.textBaseline = 'alphabetic'
 
+  // Accumulate all rectangles to fill, keyed by color. Across every genome
+  // and every paint region, we'll end up issuing exactly one fill() per
+  // distinct color.
+  const colorPaths = new Map<string, Path2D>()
+  const addRect = (color: string, x: number, y: number, w: number, h: number): void => {
+    let path = colorPaths.get(color)
+    if (!path) {
+      path = new Path2D()
+      colorPaths.set(color, path)
+    }
+    path.rect(x, y, w, h)
+  }
+
+  const seqExtentsByTrack: SeqExtent[][] = []
+
   for (let i = 0; i < genomesInOrder.length; i++) {
     const g = genomesInOrder[i]
     const vp = viewportFn(g.id)
     const y = trackY(i, layout)
-    const ppb = pixelsPerBp(vp, g.total_length, canvasWidth)
     const { startBp, endBp } = visibleRange(vp, g.total_length, canvasWidth)
 
+    // Genome label (drawn immediately — small, not worth batching).
     ctx.fillStyle = '#ddd'
     ctx.fillText(g.label, 8, y - 6)
 
     const painting = paintByGenome.get(g.id)
-    const drawnSeqs = painting
-      ? drawPaintedBars(ctx, g, painting, referenceColorMap, vp, canvasWidth, y, layout, startBp, endBp)
-      : drawSeqPaletteBars(ctx, g, vp, canvasWidth, y, layout, startBp, endBp)
+    const extents: SeqExtent[] = []
 
-    // Sequence name labels (on top of whatever colour bars we drew)
-    if (ppb > 0) {
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)'
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)'
-      ctx.lineWidth = 3
-      ctx.textAlign = 'center'
-      for (const { name, x0, x1 } of drawnSeqs) {
+    // Base pass: for each visible sequence, fill its full on-screen extent.
+    for (const seq of g.sequences) {
+      const seqStart = seq.offset
+      const seqEnd = seq.offset + seq.length
+      if (seqEnd <= startBp || seqStart >= endBp) continue
+      const x0 = Math.max(0, bpToPx(seqStart, vp, g.total_length, canvasWidth))
+      const x1 = Math.min(canvasWidth, bpToPx(seqEnd, vp, g.total_length, canvasWidth))
+      const w = Math.max(1, x1 - x0)
+      const baseColor = painting ? UNKNOWN_COLOR : seq.color
+      addRect(baseColor, x0, y, w, layout.trackHeight)
+      extents.push({ name: seq.name, x0, x1, y })
+    }
+
+    // Overlay pass: painted regions, with sub-pixel LOD.
+    if (painting) {
+      const seqOffsets = new Map(g.sequences.map((s) => [s.name, s.offset]))
+      for (const r of painting) {
+        const off = seqOffsets.get(r.seq)
+        if (off === undefined) continue
+        const rStart = off + r.start
+        const rEnd = off + r.end
+        if (rEnd <= startBp || rStart >= endBp) continue
+        const x0 = Math.max(0, bpToPx(rStart, vp, g.total_length, canvasWidth))
+        const x1 = Math.min(canvasWidth, bpToPx(rEnd, vp, g.total_length, canvasWidth))
         const w = x1 - x0
-        if (w > 30) {
-          const cx = x0 + w / 2
-          const cy = y + layout.trackHeight / 2 + 4
-          ctx.strokeText(name, cx, cy)
-          ctx.fillText(name, cx, cy)
-        }
+        if (w < 1) continue // sub-pixel: would alias into a single column anyway
+        addRect(colorFor(r.reference_seq, referenceColorMap), x0, y, w, layout.trackHeight)
       }
-      ctx.textAlign = 'start'
-      ctx.lineWidth = 1
+    }
+
+    seqExtentsByTrack.push(extents)
+  }
+
+  // 1) One fill call per color across every track + region. This is where
+  //    batching pays off: with ~12 palette colors + UNKNOWN_COLOR we issue
+  //    ~13 Canvas ops regardless of region count.
+  for (const [color, path] of colorPaths) {
+    ctx.fillStyle = color
+    ctx.fill(path)
+  }
+
+  // 2) Color-independent chromosome separators. 1 px dark + 1 px light
+  //    side-by-side so the boundary reads on any background. Small ticks
+  //    above and below extend beyond the bar to signal the split even when
+  //    neighbouring regions share a colour.
+  for (const extents of seqExtentsByTrack) {
+    for (const { x0, x1, y } of extents) {
+      drawSeparator(ctx, x0, y, layout.trackHeight)
+      drawSeparator(ctx, x1, y, layout.trackHeight)
     }
   }
+
+  // 3) Sequence-name labels (drawn last so they overlay fills + separators).
+  ctx.font = '11px system-ui, sans-serif'
+  ctx.fillStyle = LABEL_FILL
+  ctx.strokeStyle = LABEL_STROKE
+  ctx.lineWidth = 3
+  ctx.textAlign = 'center'
+  for (const extents of seqExtentsByTrack) {
+    for (const { name, x0, x1, y } of extents) {
+      const w = x1 - x0
+      if (w <= 30) continue
+      const cx = x0 + w / 2
+      const cy = y + layout.trackHeight / 2 + 4
+      ctx.strokeText(name, cx, cy)
+      ctx.fillText(name, cx, cy)
+    }
+  }
+  ctx.textAlign = 'start'
+  ctx.lineWidth = 1
 }
 
-type DrawnSeq = { name: string; x0: number; x1: number }
-
-function drawSeqPaletteBars(
+function drawSeparator(
   ctx: CanvasRenderingContext2D,
-  g: Genome,
-  viewport: Viewport,
-  canvasWidth: number,
+  x: number,
   y: number,
-  layout: TrackLayout,
-  startBp: number,
-  endBp: number,
-): DrawnSeq[] {
-  const out: DrawnSeq[] = []
-  for (const seq of g.sequences) {
-    const seqStart = seq.offset
-    const seqEnd = seq.offset + seq.length
-    if (seqEnd <= startBp || seqStart >= endBp) continue
-    const x0 = Math.max(0, bpToPx(seqStart, viewport, g.total_length, canvasWidth))
-    const x1 = Math.min(canvasWidth, bpToPx(seqEnd, viewport, g.total_length, canvasWidth))
-    const w = Math.max(1, x1 - x0)
-    ctx.fillStyle = seq.color
-    ctx.fillRect(x0, y, w, layout.trackHeight)
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)'
-    ctx.strokeRect(x0 + 0.5, y + 0.5, w - 1, layout.trackHeight - 1)
-    out.push({ name: seq.name, x0, x1 })
-  }
-  return out
+  trackHeight: number,
+): void {
+  const top = y - SEP_TICK
+  const bottom = y + trackHeight + SEP_TICK
+  // Dark line at (x + 0.5) and light line at (x - 0.5) — 2 px wide combined.
+  ctx.lineWidth = 1
+  ctx.strokeStyle = SEP_DARK
+  ctx.beginPath()
+  ctx.moveTo(x + 0.5, top)
+  ctx.lineTo(x + 0.5, bottom)
+  ctx.stroke()
+  ctx.strokeStyle = SEP_LIGHT
+  ctx.beginPath()
+  ctx.moveTo(x - 0.5, top)
+  ctx.lineTo(x - 0.5, bottom)
+  ctx.stroke()
 }
 
-function drawPaintedBars(
-  ctx: CanvasRenderingContext2D,
-  g: Genome,
-  regions: PaintRegion[],
-  referenceColorMap: Map<string, string>,
-  viewport: Viewport,
-  canvasWidth: number,
-  y: number,
-  layout: TrackLayout,
-  startBp: number,
-  endBp: number,
-): DrawnSeq[] {
-  // Build per-sequence offset table once.
-  const seqOffsets = new Map(g.sequences.map((s) => [s.name, s]))
-
-  // First pass: paint each sequence's full span in UNKNOWN_COLOR, so uncovered
-  // stretches still register visually.
-  const drawnSeqs: DrawnSeq[] = []
-  for (const seq of g.sequences) {
-    const seqStart = seq.offset
-    const seqEnd = seq.offset + seq.length
-    if (seqEnd <= startBp || seqStart >= endBp) continue
-    const x0 = Math.max(0, bpToPx(seqStart, viewport, g.total_length, canvasWidth))
-    const x1 = Math.min(canvasWidth, bpToPx(seqEnd, viewport, g.total_length, canvasWidth))
-    ctx.fillStyle = UNKNOWN_COLOR
-    ctx.fillRect(x0, y, Math.max(1, x1 - x0), layout.trackHeight)
-    drawnSeqs.push({ name: seq.name, x0, x1 })
-  }
-
-  // Second pass: paint each region over its base.
-  for (const r of regions) {
-    const seq = seqOffsets.get(r.seq)
-    if (!seq) continue
-    const rStart = seq.offset + r.start
-    const rEnd = seq.offset + r.end
-    if (rEnd <= startBp || rStart >= endBp) continue
-    const x0 = Math.max(0, bpToPx(rStart, viewport, g.total_length, canvasWidth))
-    const x1 = Math.min(canvasWidth, bpToPx(rEnd, viewport, g.total_length, canvasWidth))
-    const w = Math.max(1, x1 - x0)
-    ctx.fillStyle = colorFor(r.reference_seq, referenceColorMap)
-    ctx.fillRect(x0, y, w, layout.trackHeight)
-  }
-
-  // Border around each sequence to separate bars visually.
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)'
-  for (const { x0, x1 } of drawnSeqs) {
-    const w = Math.max(1, x1 - x0)
-    ctx.strokeRect(x0 + 0.5, y + 0.5, w - 1, layout.trackHeight - 1)
-  }
-
-  return drawnSeqs
-}
+// Re-export for callers (pixelsPerBp is used in LOD computation in App).
+export { pixelsPerBp }
