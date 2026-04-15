@@ -370,6 +370,52 @@ Order is dependency-driven; each task is small and independently testable.
 ### 5.6 Status bar ✅
 - [x] Shows current visible region (top genome as anchor), bp/px, current LOD mode, and a "loading N pairs" badge for in-flight derivations.
 
+### 5.7 v0.1.1 refinements — reference-propagated colors + scoped zoom/pan
+
+**Color propagation via the top (reference) genome.** Today every genome carries its own palette and a ribbon is coloured by its *target* sequence. This makes translocations invisible: the same piece of ancestry carries different colours in different genomes. Fix by propagating colour along SCM identity from a single reference (the top-ordered genome):
+
+- The top genome in `order` is the **reference**. Its palette defines the colour space for the whole display.
+- Every SCM's colour is the reference's colour for whichever of its sequences contains the SCM (via `scm_to_genomes`).
+- SCMs not present in the reference fall back to a configurable "minor" colour (reuse `PaletteCfg.minor_color`).
+- **Consequence:** a non-reference genome's single chromosome can be painted in multiple colours, reflecting the reference-relative origin of each SCM — that's the point; it makes rearrangements visually obvious.
+- **Block-level colour** is the *dominant* reference sequence among the block's SCMs (plurality vote; tie-broken by lowest seq index).
+- **Reorder triggers repaint.** Changing the top genome swaps the colour space; pair caches are invalidated because blocks' `reference_seq` changes.
+
+Backend tasks:
+- [ ] `SCMStore.reference_seq_map(ref_genome_id)` — returns an `int32` array of length `universe_size` mapping `scm_id_idx → reference_seq_idx` (or `-1` if the SCM is absent from the reference). Cached lazily per reference id.
+- [ ] Extend `SyntenyBlock` with `scm_row_start, scm_row_end` (indices into `PairwiseSCM.rows`) so the API layer can look up each block's SCMs for dominant-reference computation. Update `detect_blocks` + tests.
+- [ ] `/api/synteny/blocks` + `/api/synteny/scms` accept `reference=<genome_id>` query param; validate. When provided, populate `reference_seq` on each block (plurality) and each SCM (direct lookup).
+- [ ] Schema updates: optional `reference_seq: str | null` on `SyntenyBlockSchema` and `PairwiseSCMSchema`.
+
+Frontend tasks:
+- [ ] API client: add `reference` to `blocks()` and `scms()` options.
+- [ ] Pair-cache keys include the reference id (`"g1|g2|ref"`). Changing order[0] evicts or just re-fetches; simpler to re-fetch.
+- [ ] Ribbon + SCM renderers: colour = reference genome's `Sequence.color` looked up from `reference_seq`; fallback to `palette.minor_color` from `/api/config` when `reference_seq` is null.
+- [ ] When dragging reorder, if order[0] changes, wipe pair caches before re-deriving.
+
+**Scoped zoom + pan: global by default, per-genome on modifier or mid-track interaction.**
+
+- Default zoom/pan applies to *all* genomes simultaneously (current behaviour).
+- **Shift + wheel** (or Shift + drag) while the cursor is over a specific genome row affects that genome only — a per-genome override layered on top of the global viewport.
+- No modifier, or cursor in the gap between rows: global.
+- Per-genome overrides persist until reset.
+- **Reset view** clears all per-genome overrides and resets the global viewport.
+- Status bar reflects current scope ("global" or "genome: ID").
+
+Frontend tasks:
+- [ ] Replace the single `viewport` with `globalViewport: Viewport` + `overrides: SvelteMap<genome_id, Viewport>`.
+- [ ] Helper `effectiveViewport(genome_id)` returns override if present else global. All renderers switch to this lookup.
+- [ ] `genomeUnderCursor(y)` — geometric hit test against `trackY`/`trackHeight`; returns id or null.
+- [ ] Wheel handler: if `e.shiftKey && genomeUnderCursor` → update that genome's override; else update global.
+- [ ] Pointer handlers: capture target genome at `pointerdown`; apply to the same genome (or global) throughout the drag.
+- [ ] Reset-view clears `overrides` alongside resetting `globalViewport`.
+- [ ] Status bar shows scope indicator when any override is active.
+
+Tests (additions):
+- [ ] Backend: `reference_seq_map` correctness (absent SCMs → -1; all present → seq index matches the reference).
+- [ ] Backend: API returns expected `reference_seq` on blocks (dominant-vote logic) and SCMs.
+- [ ] Frontend (vitest): `genomeUnderCursor` boundary cases; `effectiveViewport` fallback to global.
+
 **Phase-2 done criteria:**
 1. With `example_data` loaded and 8 genomes, a fresh page renders all tracks + initial adjacent-pair ribbons within < 3 s.
 2. Reorder a genome: stale ribbons clear, new ribbons appear; first-time pair derive < 2 s, cached re-adjacency instant.
