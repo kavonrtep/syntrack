@@ -1,6 +1,6 @@
 [project]
 name = "syntrack"
-version = "0.2.0.dev0"
+version = "0.2.0"
 description = "Genome synteny visualization tool"
 readme = "README.md"
 requires-python = ">=3.12"
