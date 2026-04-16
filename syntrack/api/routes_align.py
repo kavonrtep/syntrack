@@ -123,9 +123,7 @@ def align(
         result = _align_pos(blocks_on_seq, pos, k=k)
         if result is None:
             mappings.append(
-                AlignmentMappingSchema(
-                    genome_id=target_id, seq=None, pos=None, confidence=0.0
-                )
+                AlignmentMappingSchema(genome_id=target_id, seq=None, pos=None, confidence=0.0)
             )
             continue
         seq_idx, target_pos, conf = result

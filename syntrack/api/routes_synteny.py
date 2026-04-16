@@ -52,9 +52,9 @@ def _block_intersects_g2(b: SyntenyBlock, target_seq_idx: int, start: int, end: 
     return b.g2_seq_idx == target_seq_idx and not (b.g2_end <= start or b.g2_start >= end)
 
 
-def _resolve_reference(state: AppState, reference: str | None) -> tuple[
-    np.ndarray | None, list[str] | None
-]:
+def _resolve_reference(
+    state: AppState, reference: str | None
+) -> tuple[np.ndarray | None, list[str] | None]:
     """If ``reference`` is set, return ``(ref_seq_map, ref_seq_names)``; else ``(None, None)``.
 
     Raises 404 if the reference is not a known genome.

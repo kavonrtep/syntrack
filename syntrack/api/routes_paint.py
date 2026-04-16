@@ -46,9 +46,7 @@ def _trivial_self_paint(state: AppState, genome_id: str) -> list[PaintRegionSche
 @router.get("/paint", response_model=PaintResponse)
 def get_paint(
     genome_id: str = Query(..., description="Genome to paint."),
-    reference: str = Query(
-        ..., description="Reference genome whose palette drives the colours."
-    ),
+    reference: str = Query(..., description="Reference genome whose palette drives the colours."),
     state: AppState = Depends(get_state),
 ) -> PaintResponse:
     if genome_id not in state.genome_store:

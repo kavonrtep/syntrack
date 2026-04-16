@@ -93,9 +93,7 @@ def test_lint_data_fails_on_bad_config(tmp_path: Path) -> None:
     assert result.exit_code == 1
 
 
-def test_lint_data_reads_config_from_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_lint_data_reads_config_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Without --config, SYNTRACK_CONFIG env var is used."""
     cfg = _setup_dataset(tmp_path)
     monkeypatch.setenv("SYNTRACK_CONFIG", str(cfg))
@@ -104,9 +102,7 @@ def test_lint_data_reads_config_from_env(
     assert "Loaded 2 genomes" in result.stdout
 
 
-def test_lint_data_cli_flag_beats_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_lint_data_cli_flag_beats_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--config wins over SYNTRACK_CONFIG when both point at different files."""
     cfg = _setup_dataset(tmp_path)
     # Point env at a nonexistent file; CLI points at the real one.

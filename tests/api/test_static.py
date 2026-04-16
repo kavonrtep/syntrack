@@ -17,9 +17,7 @@ def test_static_mount_when_env_set(
     """When SYNTRACK_FRONTEND_DIR points at a valid dir, `/` serves index.html."""
     dist = tmp_path / "dist"
     dist.mkdir()
-    (dist / "index.html").write_text(
-        "<!doctype html><html><body>hello syntrack</body></html>"
-    )
+    (dist / "index.html").write_text("<!doctype html><html><body>hello syntrack</body></html>")
     monkeypatch.setenv("SYNTRACK_FRONTEND_DIR", str(dist))
 
     client = TestClient(create_app(app_state))

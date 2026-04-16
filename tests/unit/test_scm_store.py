@@ -263,7 +263,9 @@ def test_reference_seq_map_respects_multi_sequence_genome(tmp_path: Path) -> Non
             ],
         ),
         _make_genome(
-            tmp_path, "B", [("chr1", 1000)],
+            tmp_path,
+            "B",
+            [("chr1", 1000)],
             [_blast_row("OG1", "chr1", 100, 199), _blast_row("OG2", "chr1", 500, 599)],
         ),
     ]

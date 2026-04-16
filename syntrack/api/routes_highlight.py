@@ -68,19 +68,13 @@ def get_highlight(
             continue
         target_positions = state.scm_store.genome_positions[target_id]
         if scm_idxs.size == 0 or target_positions.size == 0:
-            targets.append(
-                HighlightTargetSchema(genome_id=target_id, scm_count=0, positions=[])
-            )
+            targets.append(HighlightTargetSchema(genome_id=target_id, scm_count=0, positions=[]))
             continue
         # Both arrays are already unique per genome (uniqueness filter).
-        mask = np.isin(
-            target_positions["scm_id_idx"], scm_idxs, assume_unique=True
-        )
+        mask = np.isin(target_positions["scm_id_idx"], scm_idxs, assume_unique=True)
         matching = target_positions[mask]
         if matching.size == 0:
-            targets.append(
-                HighlightTargetSchema(genome_id=target_id, scm_count=0, positions=[])
-            )
+            targets.append(HighlightTargetSchema(genome_id=target_id, scm_count=0, positions=[]))
             continue
         target_genome = state.genome_store[target_id]
         positions = [
