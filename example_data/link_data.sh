@@ -24,8 +24,10 @@ GENOMES=(
   IPIP200579_2026-04-14
 )
 
-CSV="${SCRIPT_DIR}/genomes.csv"
+CSV="${SCRIPT_DIR}/genomes.csv"              # paths relative to the CSV (for in-repo use)
+CSV_ABS="${SCRIPT_DIR}/genomes_abs_path.csv" # fully resolved absolute paths (for container use)
 printf 'genome_id,fai,SCM\n' > "${CSV}"
+printf 'genome_id,fai,SCM\n' > "${CSV_ABS}"
 
 missing=0
 for g in "${GENOMES[@]}"; do
@@ -49,6 +51,14 @@ for g in "${GENOMES[@]}"; do
   ln -sfn "${src_blast}" "${dst_blast}"
 
   printf '%s,%s,%s\n' "${g}" "${g}.fai" "${g}.blast_out" >> "${CSV}"
+
+  # readlink -f resolves the symlink through to the real file, which is what
+  # we want for the container workflow where the host path is bind-mounted
+  # at the matching location inside the container.
+  abs_fai="$(readlink -f "${src_fai}")"
+  abs_blast="$(readlink -f "${src_blast}")"
+  printf '%s,%s,%s\n' "${g}" "${abs_fai}" "${abs_blast}" >> "${CSV_ABS}"
+
   echo "linked ${g}"
 done
 
@@ -58,3 +68,4 @@ if [[ "${missing}" -ne 0 ]]; then
 fi
 
 echo "wrote ${CSV} with ${#GENOMES[@]} genomes"
+echo "wrote ${CSV_ABS} with ${#GENOMES[@]} genomes (absolute paths for container runs)"

@@ -5,6 +5,7 @@ hermit
 example_data/*.fai
 example_data/*.blast_out
 example_data/genomes.csv
+example_data/genomes_abs_path.csv
 
 # Python
 __pycache__/

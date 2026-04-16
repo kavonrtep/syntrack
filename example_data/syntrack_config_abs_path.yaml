@@ -1,0 +1,27 @@
+# SynTrack config for the pea pangenome example dataset — container variant.
+#
+# Points at genomes_abs_path.csv (absolute paths that resolve to the real
+# source files rather than going through the in-repo symlinks). Use this one
+# when testing with Docker / Apptainer and bind-mounting the host data path
+# at the matching location inside the container, e.g.:
+#
+#   docker run --rm \
+#     -v /mnt/ceph/454_data/Pisum_pangenome/assemblies:/mnt/ceph/454_data/Pisum_pangenome/assemblies:ro \
+#     -v "$PWD/example_data/syntrack_config_abs_path.yaml:/config/syntrack_config.yaml:ro" \
+#     -v "$PWD/example_data/genomes_abs_path.csv:/mnt/ceph/.../genomes_abs_path.csv:ro" \
+#     -p 8765:8765 ghcr.io/kavonrtep/syntrack:v0.2.0
+#
+# For bare-metal / dev runs, use syntrack_config.yaml (symlink-based) instead.
+
+data:
+  genomes_csv: ./genomes_abs_path.csv
+
+blast_filtering:
+  min_pident: 95.0
+  min_length: 30          # painting probes are ~40-47 bp
+  max_evalue: 1.0e-10
+  uniqueness_ratio: 1.5
+
+block_detection:
+  max_gap: 300000
+  min_block_size: 3

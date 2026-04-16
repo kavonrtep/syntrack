@@ -4,13 +4,16 @@ Development / test dataset for SynTrack: 8 *Pisum sativum* (pea) pangenome assem
 
 ## Contents
 
-- `link_data.sh` — idempotent script that (re)creates the symlinks and regenerates `genomes.csv`. Re-run whenever genomes are added/updated; edit the `GENOMES` array in-place to add entries.
-- `genomes.csv` — index consumed by the loader. Columns: `genome_id,fai,SCM`.
+- `link_data.sh` — idempotent script that (re)creates the symlinks and regenerates both manifest CSVs. Re-run whenever genomes are added/updated; edit the `GENOMES` array in-place to add entries.
+- `genomes.csv` — manifest with filename-only paths (`JI1006_2026-01-19.fai`) resolved against this directory's symlinks. Use for in-repo / bare-metal runs via `./dev.sh syntrack serve --config example_data/syntrack_config.yaml`.
+- `genomes_abs_path.csv` — same manifest but with **absolute paths** (`/mnt/ceph/454_data/.../<genome>/...`) pointing straight at the real files (symlinks dereferenced via `readlink -f`). Use for container runs where the host data path is bind-mounted at the matching location inside the container — see `deploy/README.md`.
+- `syntrack_config.yaml` — config pointing at `genomes.csv` (bare-metal).
+- `syntrack_config_abs_path.yaml` — config pointing at `genomes_abs_path.csv` (container).
 - `<genome_id>.fai` — symlink to the assembly FASTA index.
 - `<genome_id>.blast_out` — symlink to the SCM BLAST hits table.
 - `example_data_source.md` — original spec for this dataset.
 
-Symlink targets are under `/mnt/ceph/454_data/Pisum_pangenome/assemblies/<genome_id>/`. This directory is gitignored (`example_data/*.fai`, `*.blast_out`, `genomes.csv`); only the script and docs are checked in.
+Symlink targets are under `/mnt/ceph/454_data/Pisum_pangenome/assemblies/<genome_id>/`. The generated manifests and the symlinks themselves are gitignored (`example_data/*.fai`, `*.blast_out`, `genomes.csv`, `genomes_abs_path.csv`); only the scripts, configs, and docs are checked in.
 
 ## Genomes (8)
 
