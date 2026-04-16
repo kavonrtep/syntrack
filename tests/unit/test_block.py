@@ -280,13 +280,9 @@ def test_blocks_internally_collinear() -> None:
 
 
 @pytest.mark.integration
-def test_real_pea_pair_derives_and_blocks() -> None:
+def test_real_pea_pair_derives_and_blocks(pea_config_path: Path) -> None:
     """Derive one pair from the real pea data; block counts should be in a sane range."""
-    cfg_path = Path("example_data/syntrack_config.yaml")
-    if not cfg_path.exists():
-        pytest.skip("example_data not linked")
-
-    cfg = load_config(cfg_path)
+    cfg = load_config(pea_config_path)
     manifest = read_manifest(cfg.data.genomes_csv)
     gs = GenomeStore.load(manifest, cfg.palette, cfg.genome_labels)
     params = BlastFilterParams(

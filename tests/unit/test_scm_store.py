@@ -296,13 +296,9 @@ def test_genome_with_no_kept_scms(tmp_path: Path) -> None:
 
 
 @pytest.mark.integration
-def test_load_real_pea_dataset() -> None:
+def test_load_real_pea_dataset(pea_config_path: Path) -> None:
     """End-to-end: load all 8 pea genomes from example_data/."""
-    cfg_path = Path("example_data/syntrack_config.yaml")
-    if not cfg_path.exists():
-        pytest.skip("example_data not linked")
-
-    cfg = load_config(cfg_path)
+    cfg = load_config(pea_config_path)
     manifest = read_manifest(cfg.data.genomes_csv)
     gs = GenomeStore.load(manifest, cfg.palette, cfg.genome_labels)
     params = BlastFilterParams(

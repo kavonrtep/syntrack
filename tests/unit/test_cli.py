@@ -124,11 +124,8 @@ def test_lint_data_errors_when_no_config_anywhere(
 
 
 @pytest.mark.integration
-def test_lint_data_on_real_pea_dataset() -> None:
-    cfg = Path("example_data/syntrack_config.yaml")
-    if not cfg.exists():
-        pytest.skip("example_data not linked")
-    result = runner.invoke(app, ["lint-data", "--config", str(cfg)])
+def test_lint_data_on_real_pea_dataset(pea_config_path: Path) -> None:
+    result = runner.invoke(app, ["lint-data", "--config", str(pea_config_path)])
     assert result.exit_code == 0, result.stdout
     assert "Loaded 8 genomes" in result.stdout
     assert "JI1006_2026-01-19" in result.stdout
