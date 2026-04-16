@@ -1,0 +1,65 @@
+# SynTrack — docker-compose template.
+#
+# Quickstart:
+#   1. Copy this file to a directory where you'll run it (anywhere is fine).
+#   2. Put your syntrack_config.yaml beside it (or edit the path in the
+#      volumes block below).
+#   3. Under `volumes:` add one `host_path:host_path:ro` entry per top-level
+#      directory your genomes.csv references. Using the SAME path inside and
+#      outside the container means absolute paths in genomes.csv (and any
+#      symlinks created by tools like `link_data.sh`) resolve identically —
+#      no path rewriting needed.
+#   4. `docker compose up`
+#   5. Open http://localhost:8765
+#
+# Remote host? Forward the port to your laptop first:
+#   ssh -L 8765:localhost:8765 <remote-host>
+
+services:
+  syntrack:
+    image: ghcr.io/kavonrtep/syntrack:latest
+    # Pin a specific release for reproducibility, e.g.:
+    #   image: ghcr.io/kavonrtep/syntrack:v0.2.0
+
+    ports:
+      # host:container — change the left side if 8765 is taken on the host
+      # (e.g., "9000:8765").
+      - "8765:8765"
+
+    volumes:
+      # (a) your syntrack_config.yaml, mounted at the default location the
+      #     image looks at (SYNTRACK_CONFIG).
+      - ./syntrack_config.yaml:/config/syntrack_config.yaml:ro
+
+      # (b) your data directories. IMPORTANT: use matching host paths on
+      #     both sides of the colon. Add one entry per source directory
+      #     referenced by genomes.csv. Examples:
+      #
+      # - /mnt/ceph/454_data/Pisum_pangenome/assemblies:/mnt/ceph/454_data/Pisum_pangenome/assemblies:ro
+      # - /scratch/my_genomes:/scratch/my_genomes:ro
+
+    # If the genome data tree contains symlinks that point outside of any of
+    # the mounts above, add those targets as extra mounts too (same pattern).
+
+    # Uncomment to match your host UID/GID — only needed if the container has
+    # to write to a bind-mounted path (reserved for the Phase 4 .npz cache;
+    # not used in v0.2.0):
+    # user: "${UID:-1000}:${GID:-1000}"
+
+    restart: unless-stopped
+
+    healthcheck:
+      # 200 on /healthz means SCMStore has finished loading and the server
+      # is accepting requests. Loading 8 pea genomes takes ~30–60 s, so
+      # start_period is generous to avoid false "unhealthy" reports.
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request, sys;
+          sys.exit(0 if urllib.request.urlopen('http://localhost:8765/healthz', timeout=2).status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3

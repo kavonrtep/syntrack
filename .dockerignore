@@ -1,0 +1,46 @@
+# Everything excluded from the docker build context. Keep the context tight so
+# rebuilds don't pay for unrelated changes.
+
+# VCS
+.git/
+.gitignore
+.github/
+
+# Venvs / hermit
+.venv/
+.venv-hermit/
+dev.sh
+
+# Python caches / build output
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Frontend ephemerals (we rebuild inside the image)
+frontend/node_modules/
+frontend/dist/
+
+# Tests, docs, example data — not needed at runtime
+tests/
+docs/
+example_data/
+
+# Packaging outputs
+deploy/
+Dockerfile
+.dockerignore
+
+# Config examples we don't bake into the image (user-supplied at runtime)
+syntrack_config.example.yaml
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
