@@ -29,7 +29,7 @@ This plan covers **how** we build SynTrack. **What** we build is fixed by `docs/
 
 ## 0a. Shipped increments
 
-Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs); end-to-end verified each time. **181 backend + 38 frontend tests** pass; ruff / mypy / svelte-check clean.
+Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs); end-to-end verified each time. **188 backend + 38 frontend tests** pass; ruff / mypy / svelte-check clean.
 
 ### v0.1 ✅ (Phases 1 + 2 core)
 - All of Phase 1 — backend MVP, `syntrack serve` / `lint-data` CLI, tests.
@@ -51,8 +51,14 @@ Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs)
 - Sidebar redesign: reorder moved to DOM handles sitting above each canvas bar; sidebar is now a visibility selector (checkboxes, `All` / `None` shortcuts, strike-through on unchecked).
 - `./dev.sh` auto-picks `.venv-hermit` inside hermit and falls back to `.venv` outside, so one script works in both contexts.
 
+### v0.1.3 ✅ (highlight + highlight controls — §6.1 / §6.2)
+- `GET /api/highlight` returns source SCMs (incl. `scm_ids`) + per-target cross-genome positions.
+- Ctrl / Cmd + click-drag selects a region; overlay draws an accent-colored source rectangle + per-SCM ticks across every target bar via a single batched `Path2D`. Esc / Reset clears.
+- Fade slider (0 – 0.9) dims painted bars + ribbons + SCM lines while leaving the overlay, separators, and labels at full contrast.
+- Sidebar highlight pills — per-genome count of SCMs inside the selection (yellow when >0, dimmed outline when 0).
+- TSV download — `scm_id, present_in, <per-genome 0/1 columns>`; filename includes the selected region.
+
 ### Still deferred (v0.2+)
-- `/api/highlight` (click-select a region, highlight syntenic SCMs as ticks on every genome — complementary to alignment, which moves the viewports). Phase 3.
 - `/api/fish` — *user-defined* custom paint sets (arbitrary SCM IDs / source regions become stackable colour overlays). Scope reduced because reference painting already covers the default "FISH the top genome's chromosomes" use case. Phase 3.
 - Block-param slider UI + `/api/stats/blocks` sweep diagnostics. Phase 4.
 - Exports (BED, TSV, txt, PNG/SVG). Phase 4.
@@ -452,19 +458,29 @@ Work that wasn't in the original plan but landed before moving on to Phase 3.
 - `/api/highlight` — click-select a region on genome X; mark the individual SCMs (as ticks) that belong to that region across every other genome *without* moving their viewports. Complementary to alignment (which moves viewports but doesn't mark individual SCMs).
 - `/api/fish` — *user-defined custom* paint sets (arbitrary SCM ID list or a specific non-reference region becomes a stackable colour overlay on top of the reference painting). Lets users compose multiple coloured overlays for figure-making, independent of whichever genome is currently reference.
 
-### 6.1 Backend
-- [ ] `POST /api/highlight` (design §4.2). Region → SCM IDs → cross-genome positions via `scm_to_genomes`.
-- [ ] `POST /api/fish` — same machinery, input is either explicit `scm_ids` or `source_genome` + `source_region`.
+### 6.1 Highlight — backend ✅
+- [x] `GET /api/highlight?genome_id=X&region=seq:start-end` (functionally equivalent to the spec's POST). Uses `SCMStore.hits_in_region` (offset-sorted binary search) for the source SCMs, then `np.isin(target.scm_id_idx, source.scm_idxs, assume_unique=True)` per target for cross-genome positions. Source is excluded from targets; every non-source genome is always returned (possibly with `positions=[]`). 7 tests.
+- [x] `HighlightSourceSchema.scm_ids: list[str]` — the source SCM IDs are returned inline so the frontend can export without a second round-trip.
 
-### 6.2 Frontend
-- [ ] Region selection: shift-click-drag on a track creates a selection; on mouse-up POSTs `/api/highlight`.
-- [ ] Overlay canvas: source rectangle, target tick marks on every genome, dim non-highlighted connections to `dimmed_opacity`.
-- [ ] `FishPalette.svelte`: list of FISH sets with color picker, label, toggle, delete. State persisted in `localStorage`.
-- [ ] FISH render pass on overlay canvas; multiple sets composited.
+### 6.2 Highlight — frontend ✅
+- [x] `canvas/draw_highlight.ts` overlay: source rectangle on the anchor's bar + a single `Path2D` of per-SCM vertical ticks across every target genome, rendered in an accent colour (`#ffdc32`) that's independent of the reference palette so it reads against painted bars.
+- [x] Overlay canvas layered between tracks and handles (z-indices 2 → 3 → 4) with `pointer-events: none` so it never interferes with pan / dblclick / drag-reorder.
+- [x] Region selection: **Ctrl / Cmd + click-drag** on a track anchors a genome + seq at pointerdown, rAF-throttled pointermove updates `endBp` against the anchor's effective viewport even as the cursor wanders to other rows; pointerup fires `/api/highlight` and caches the response.
+- [x] **Esc** / **Reset View** clear the highlight.
+- [x] **Fade slider** in the header (range 0 – 0.9): multiplies painted-bar / ribbon / SCM-line alpha so the reference coloring dims while the highlight overlay, separators, and labels stay at full contrast. Implemented as a single `fadeMultiplier` passed to `drawTracks` / `drawRibbons` / `drawScmLines`.
+- [x] **Sidebar highlight pill**: each genome row shows a yellow pill with the highlighted-SCM count for that genome while a highlight is active; a dimmed outline-only variant indicates "checked but 0 matches" so it reads distinctly from "no highlight".
+- [x] **↓ SCM IDs download**: TSV with columns `scm_id, present_in, <one 0/1 per loaded genome>`. Genome column order follows `allGenomes` (server load order) so it's stable across reorder/visibility changes. Filename `syntrack_<genome>_<seq>_<start>-<end>_scm_ids.tsv`.
+- [x] Status-line summary: `highlight <seq>:<start>-<end> — <src_count> source SCMs, <cross_count> cross-genome (Esc to clear)`.
+
+### 6.3 FISH — user-defined custom paint sets (pending)
+- [ ] `POST /api/fish` — input is either explicit `scm_ids` or `source_genome` + `source_region`; response returns per-genome positions just like `/api/highlight` plus a label and colour.
+- [ ] Frontend palette panel: list of FISH sets with colour picker, label, toggle, delete. State persisted in `localStorage`.
+- [ ] FISH render pass on the overlay canvas; multiple sets composited, distinct colours. Reuses `draw_highlight`-style Path2D batching per set.
+- [ ] "Save current highlight as FISH set" button on the highlight controls (turns a transient selection into a persistent coloured overlay).
 
 **Phase-3 done criteria:**
-1. Select a 5 Mb region on JI1006 chr1 → ticks appear on all 7 other genomes within < 500 ms; counts match `/api/highlight` response.
-2. Create two FISH sets with distinct colors → both visible simultaneously on every genome.
+1. ✅ Select a 5 Mb region on JI1006 chr1 → ticks appear on all 7 other genomes within < 500 ms; counts match `/api/highlight` response.
+2. ⏸ Create two FISH sets with distinct colors → both visible simultaneously on every genome. *(§6.3 pending.)*
 
 ---
 
@@ -483,7 +499,7 @@ Work that wasn't in the original plan but landed before moving on to Phase 3.
 
 ## 8. Test strategy summary
 
-Current totals after v0.1.2: **181 backend** (pytest) + **38 frontend** (vitest). Ruff, mypy, svelte-check all clean.
+Current totals after v0.1.3: **188 backend** (pytest) + **38 frontend** (vitest). Ruff, mypy, svelte-check all clean.
 
 | Layer | Tool | What it covers |
 |---|---|---|
@@ -560,8 +576,15 @@ v0.1.2 ────────────────────────�
   Sidebar → visibility selector; reorder moved to canvas DOM handles
   dev.sh resolves .venv-hermit (inside) / .venv (outside) automatically
 
+v0.1.3 ──────────────────────────────────────────── ✅ SHIPPED (§6.1 / §6.2)
+  /api/highlight (source scm_ids + per-target positions)
+  Ctrl / Cmd + drag region selection, Path2D-batched tick overlay
+  Fade slider (dims reference palette without touching highlight / layout)
+  Sidebar per-genome highlight pills
+  TSV export: scm_id · present_in · <genome 0/1 presence columns>
+
 v0.2+ ────────────────────────────────────────────── ⏸
-  Phase 3 (highlight + custom-FISH — scope reduced, see §6 note)
+  Phase 3.3 (custom /api/fish paint sets — §6.3, scope reduced vs original)
   Phase 4 (block-param slider UI, /stats/blocks, exports, precompute CLI,
            .npz cache, request debouncing/cancellation, axis ticks,
            tooltips, filtering-stats UI, Playwright E2E)

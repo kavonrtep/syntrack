@@ -1,6 +1,6 @@
 # SynTrack
 
-Genome synteny visualization tool. Multi-genome view with adjacent-pair connection ribbons, region highlight propagation (post-v0.1), and in silico FISH painting (post-v0.1).
+Genome synteny visualization tool. Multi-genome view with adjacent-pair connection ribbons, reference-palette coloring that propagates colour across genomes via SCM identity, double-click synteny alignment, and Ctrl-drag region highlight with cross-genome tick marks + TSV export.
 
 - Design: [`docs/DESIGN_v03.md`](docs/DESIGN_v03.md) (authoritative)
 - Implementation plan: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
@@ -8,7 +8,22 @@ Genome synteny visualization tool. Multi-genome view with adjacent-pair connecti
 
 ## Status
 
-**v0.1 = Phases 1 + 2 complete.** Browse-only viewer with reorder, block ribbons, and SCM-line LOD switch. No highlight, FISH, or exports yet (deferred to v0.2 per IMPLEMENTATION_PLAN D16).
+**v0.1.3 shipped.** Everything Phase 1 + 2 plus v0.1.1 reference-propagated colors & scoped zoom/pan, v0.1.2 perf fixes & double-click alignment, and v0.1.3 region highlight with fade control and TSV export. User-defined FISH paint sets (§6.3) and Phase 4 (tuning UI, exports, precompute) still deferred.
+
+### Keyboard / pointer cheatsheet
+
+| Action | Gesture |
+|---|---|
+| Pan | click-drag on a bar |
+| Zoom | mouse wheel over a bar |
+| Scope pan/zoom to one genome | **Shift** + drag / wheel over that genome's bar |
+| Reorder genomes | drag the label strip above a track |
+| Toggle a genome on/off | sidebar checkbox |
+| Vertical alignment | **double-click** a bar — every other genome shifts to match basewise resolution + syntenic position |
+| Highlight region | **Ctrl / Cmd + click-drag** on a bar — shows ticks on every genome that contains a matching SCM |
+| Fade reference coloring | "Fade" slider in the header |
+| Download highlighted SCM IDs | ↓ SCM IDs button (TSV: scm_id · present_in · one 0/1 column per genome) |
+| Clear highlight | **Esc**, or Reset view |
 
 ## Prerequisites
 
@@ -87,14 +102,14 @@ Prints per-genome filtering statistics. Exits non-zero on load errors.
 
 ```bash
 # Backend
-./dev.sh pytest                      # 159 tests; 7 use --integration via the real pea data
+./dev.sh pytest                      # 188 tests; 9 use --integration via the real pea data
 ./dev.sh ruff check syntrack tests
 ./dev.sh ruff format syntrack tests
 ./dev.sh mypy
 
 # Frontend
 cd frontend
-npm test                             # vitest, 21 tests on coords + LOD math
+npm test                             # vitest, 38 tests on coords / LOD / alignment / hit-test / colors
 npm run check                        # svelte-check
 npm run build                        # production bundle into frontend/dist/
 ```
