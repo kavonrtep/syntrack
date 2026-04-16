@@ -30,20 +30,34 @@ def main(
     """SynTrack — genome synteny visualization."""
 
 
+def _require_config(config_path: Path | None) -> Path:
+    if config_path is None:
+        typer.echo(
+            "error: no config provided — pass --config <path> or set "
+            "SYNTRACK_CONFIG in the environment",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return config_path
+
+
 @app.command(name="lint-data")
 def lint_data(
     config_path: Path = typer.Option(
-        ...,
+        None,
         "--config",
         "-c",
+        envvar="SYNTRACK_CONFIG",
         exists=True,
         dir_okay=False,
         readable=True,
-        help="Path to syntrack_config.yaml",
+        help="Path to syntrack_config.yaml. Falls back to $SYNTRACK_CONFIG.",
     ),
 ) -> None:
     """Load all genomes per the config and report per-genome filtering statistics."""
     from syntrack.loader import load_app_state
+
+    config_path = _require_config(config_path)
 
     try:
         state = load_app_state(config_path)
@@ -75,12 +89,27 @@ def lint_data(
 @app.command()
 def serve(
     config_path: Path = typer.Option(
-        ...,
+        None,
         "--config",
         "-c",
+        envvar="SYNTRACK_CONFIG",
         exists=True,
         dir_okay=False,
         readable=True,
+        help="Path to syntrack_config.yaml. Falls back to $SYNTRACK_CONFIG.",
+    ),
+    host: str = typer.Option(
+        None,
+        "--host",
+        envvar="SYNTRACK_HOST",
+        help="Bind address. Overrides server.host in the YAML. "
+        "Use 0.0.0.0 inside a container so the published port is reachable.",
+    ),
+    port: int = typer.Option(
+        None,
+        "--port",
+        envvar="SYNTRACK_PORT",
+        help="Bind port. Overrides server.port in the YAML.",
     ),
     reload: bool = typer.Option(False, "--reload", help="Enable uvicorn auto-reload."),
     dev_cors: bool = typer.Option(
@@ -89,22 +118,34 @@ def serve(
         help="Allow http://localhost:5173 (Vite dev server). Off in production.",
     ),
 ) -> None:
-    """Start the FastAPI server on the host:port from the config."""
+    """Start the FastAPI server on the host:port from the config (or overrides)."""
     import uvicorn
 
     from syntrack.api.app import create_app
     from syntrack.loader import load_app_state
 
+    config_path = _require_config(config_path)
+
     state = load_app_state(config_path)
     app_instance = create_app(state, dev_cors=dev_cors)
 
-    typer.echo(
-        f"SynTrack listening on http://{state.config.server.host}:{state.config.server.port}"
-    )
+    bind_host = host or state.config.server.host
+    bind_port = port or state.config.server.port
+
+    typer.echo("")
+    typer.echo(f"SynTrack v{__version__} listening on http://{bind_host}:{bind_port}")
+    if bind_host in {"0.0.0.0", "::"}:
+        typer.echo(f"  Local browser:   http://localhost:{bind_port}/")
+        typer.echo(
+            f"  Remote? First forward the port: "
+            f"ssh -L {bind_port}:localhost:{bind_port} <this-host>"
+        )
+    typer.echo("")
+
     uvicorn.run(
         app_instance,
-        host=state.config.server.host,
-        port=state.config.server.port,
+        host=bind_host,
+        port=bind_port,
         reload=reload,
         log_level="info",
     )

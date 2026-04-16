@@ -93,6 +93,40 @@ def test_lint_data_fails_on_bad_config(tmp_path: Path) -> None:
     assert result.exit_code == 1
 
 
+def test_lint_data_reads_config_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --config, SYNTRACK_CONFIG env var is used."""
+    cfg = _setup_dataset(tmp_path)
+    monkeypatch.setenv("SYNTRACK_CONFIG", str(cfg))
+    result = runner.invoke(app, ["lint-data"])
+    assert result.exit_code == 0, result.stdout
+    assert "Loaded 2 genomes" in result.stdout
+
+
+def test_lint_data_cli_flag_beats_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--config wins over SYNTRACK_CONFIG when both point at different files."""
+    cfg = _setup_dataset(tmp_path)
+    # Point env at a nonexistent file; CLI points at the real one.
+    monkeypatch.setenv("SYNTRACK_CONFIG", str(tmp_path / "nope.yaml"))
+    result = runner.invoke(app, ["lint-data", "--config", str(cfg)])
+    assert result.exit_code == 0, result.stdout
+    assert "Loaded 2 genomes" in result.stdout
+
+
+def test_lint_data_errors_when_no_config_anywhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SYNTRACK_CONFIG", raising=False)
+    result = runner.invoke(app, ["lint-data"])
+    assert result.exit_code != 0
+    # Error goes either to stderr or stdout (Typer mixes); check both.
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert "config" in combined.lower()
+
+
 @pytest.mark.integration
 def test_lint_data_on_real_pea_dataset() -> None:
     cfg = Path("example_data/syntrack_config.yaml")

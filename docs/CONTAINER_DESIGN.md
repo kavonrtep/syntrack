@@ -1,8 +1,10 @@
-# SynTrack — Container shipping design (draft v0.1)
+# SynTrack — Container shipping design
 
-**Status:** proposal for review. No code changes yet. Source of truth for subsequent
-work: once this doc is approved, the code prep (§4), the Dockerfile (§5), the
-compose file (§7.1), and the CI workflow (§8) all get written directly from it.
+**Status:** approved. Source of truth for the v0.2.0 release (container
+distribution). The code prep (§4), the Dockerfile (§5), the compose
+template (§7.1), and the CI workflows (§8) in this repo implement this
+doc directly; see §13 for the finalised decisions the implementation
+follows.
 
 ---
 
@@ -232,18 +234,29 @@ FastAPI mounts `/app/frontend/dist/` at `/` using `StaticFiles(html=True)`. Rout
 
 The user's genome folders can live anywhere on the host. Two conventions:
 
-1. **Config lives at `/config/syntrack_config.yaml`** (a single-file bind mount).
-2. **Data directories mount under `/data/...`** — one mount per top-level directory
-   the user's genomes.csv refers to. The user edits paths in `genomes.csv` to reflect
-   the in-container locations (e.g., `/data/ji1006/chr1.fai`).
+1. **Config** lives at `/config/syntrack_config.yaml` (a single-file bind mount).
+2. **Data directories** are mounted at **matching host paths** inside the container
+   (i.e. `-v /mnt/ceph/project/data:/mnt/ceph/project/data:ro`). The user writes
+   **absolute paths** in `genomes.csv` that match the mount points.
 
-The manifest parser already resolves relative paths against the `genomes.csv`
-directory, so if the user bind-mounts one directory that contains both `genomes.csv`
-and its neighbouring FAI/BLAST files, relative paths still work. For scattered
-setups they write absolute paths in the CSV matching the container-side mount points.
+Why the mirrored-path convention (rather than `/data/...` rewriting):
 
-Future `.npz` pair cache (Phase 4) → mount a writable directory at `/cache` and set
-`SYNTRACK_CACHE_DIR` env.
+- **Absolute paths in `genomes.csv` work without edits.** If the same CSV file
+  is used on bare metal and in the container, nothing changes — same FAI and
+  BLAST paths resolve.
+- **Symlinks resolve correctly.** The `example_data/link_data.sh` script creates
+  symlinks pointing at host filesystem locations (`/mnt/ceph/454_data/...`). If
+  those source directories are bind-mounted at the same paths inside the
+  container, the symlinks Just Work. Otherwise they dangle.
+- **No path rewriting inside the container.** The manifest parser sees the same
+  strings the user wrote.
+
+For scattered setups, the user adds one `-v host_path:host_path:ro` per source
+directory. `deploy/docker-compose.yml` ships the pattern with examples and
+inline comments so the user only edits the list.
+
+Future `.npz` pair cache (Phase 4) → mount a writable directory at `/cache` and
+set `SYNTRACK_CACHE_DIR` env.
 
 ### 6.4 Logging
 
@@ -429,29 +442,38 @@ Deliberately minimal for a single-user dev tool, but:
 
 ---
 
-## 13. Open questions
+## 13. Final decisions
 
-A few things we haven't pinned and I want your call on before I start writing code:
+Locked-in answers that drive the implementation:
 
-1. **Registry.** GHCR under the repo owner's name, fine? Any preference for
-   public-vs-private? (Public assumed.)
-2. **Version bump.** Next tag becomes **v0.2.0** (container shipping as the headline
-   feature), or keep in v0.1 and add v0.1.4?
-3. **Compose file location.** Ship `docker-compose.yml` in the repo root, or under
-   `deploy/` to keep the top level clean? I'd suggest `deploy/docker-compose.yml`.
-4. **Build target for first release.** amd64-only, OK?
-5. **Apptainer vs Singularity CE.** Assume Apptainer (community fork, default on
-   most new HPC installs) for the CI convert step. Users running Sylabs Singularity
-   CE can still run the resulting SIF.
-6. **Frontend `npm ci` in CI.** We don't yet commit `package-lock.json` (we do —
-   verified). CI will use it. OK as-is.
-7. **`syntrack serve --config` default coming from env.** Acceptable to drop the
-   `--config` required flag when `SYNTRACK_CONFIG` is set? (Currently required in
-   Typer.) Reasonable — makes the image command line clean.
-8. **Stable config path convention.** `/config/syntrack_config.yaml` as a single-file
-   mount, `/data/...` for bind-mounted genome directories. Any concerns?
-9. **Image name.** `ghcr.io/<owner>/syntrack` — needs your GH handle / org. Placeholder
-   above as `<owner>`.
+1. **Registry:** `ghcr.io/kavonrtep/syntrack`, public. GHCR visibility flipped to
+   public on the first push.
+2. **Version:** container distribution ships as **v0.2.0** — distribution
+   shape changes, so a minor bump. `pyproject.toml` carries `0.2.0.dev0`
+   while the feature lands on `main`; the tag `v0.2.0` becomes the first
+   release.
+3. **Compose location:** `deploy/docker-compose.yml`, with
+   `deploy/README.md` carrying the hands-on how-to. Top-level `README.md`
+   gets a short "Run via Docker / Singularity" section linking to it.
+4. **Platforms:** `linux/amd64` only for the first release. `arm64` added
+   later if anyone asks — one-line change in the build-push action.
+5. **Container format for HPC:** Apptainer. SIF is built via
+   `apptainer build … docker://…` in the release workflow. Users with
+   Sylabs Singularity CE can still run the resulting `.sif`.
+6. **Frontend install in CI:** `npm ci` with a pinned Node 22 runner
+   (matches the Dockerfile's `node:22-alpine` stage). `package-lock.json`
+   is already committed.
+7. **`syntrack serve --config` default from env:** yes, via Typer's
+   `envvar="SYNTRACK_CONFIG"`. Same for `--host` / `--port`
+   (`SYNTRACK_HOST` / `SYNTRACK_PORT`). CLI flag beats env, env beats YAML
+   default, no value → error with a clear message.
+8. **Path convention:** `/config/syntrack_config.yaml` as the single-file
+   config mount; **user data mounted at matching host paths** inside the
+   container (e.g., `-v /mnt/ceph/data:/mnt/ceph/data:ro`). Absolute paths
+   in `genomes.csv` then resolve identically inside and outside the
+   container — no path rewriting, and existing symlinks keep working.
+   Documented in `deploy/README.md` and in the compose template comments.
+9. **Image name:** `ghcr.io/kavonrtep/syntrack`.
 
 ---
 
