@@ -91,6 +91,17 @@ python3.12 -m venv .venv     # or python3.13 / python3.14 / python3
 .venv/bin/pip install -e ".[dev]"
 ```
 
+After any of the three options, install the git pre-commit hook (ruff lint
++ format + whitespace / EOL hygiene). `./dev.sh setup` does this
+automatically; on the manual paths run:
+
+```bash
+pre-commit install
+# first commit may be slow while pre-commit fetches the hook repos
+```
+
+Skip hooks for one commit with `git commit --no-verify` if you must.
+
 ### 2. Frontend dependencies
 
 ```bash

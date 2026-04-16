@@ -53,6 +53,13 @@ do_setup() {
     -m pip install --quiet --force-reinstall uv
   env -u PIP_TARGET -u PYTHONPATH PATH="${HERMIT_VENV_DIR}/bin:${PATH}" \
     "${HERMIT_VENV_DIR}/bin/uv" pip install --quiet -e ".[dev]"
+  # Install the git pre-commit hook from .pre-commit-config.yaml. Idempotent;
+  # rerunning setup on an existing checkout just re-points the hook.
+  if [[ -f "${SCRIPT_DIR}/.pre-commit-config.yaml" ]]; then
+    env -u PIP_TARGET -u PYTHONPATH PATH="${HERMIT_VENV_DIR}/bin:${PATH}" \
+      "${HERMIT_VENV_DIR}/bin/pre-commit" install --install-hooks >/dev/null
+    echo "pre-commit hook installed at .git/hooks/pre-commit"
+  fi
   echo "venv ready at ${HERMIT_VENV_DIR}"
 }
 
