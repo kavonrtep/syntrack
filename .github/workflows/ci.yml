@@ -24,8 +24,15 @@ jobs:
           # invalidate the cache when pyproject changes. Leaving the default
           # **/uv.lock glob would error on repos that don't ship one.
           cache-dependency-glob: pyproject.toml
-      - name: Install project with dev deps
-        run: uv pip install --system -e ".[dev]"
+      - name: Create venv + install project with dev deps
+        # Recent Ubuntu images ship PEP 668-marked Python, which rejects
+        # `uv pip install --system`. Install into an explicit venv instead
+        # and add its bin to $GITHUB_PATH so later steps find ruff / mypy /
+        # pytest without activation.
+        run: |
+          uv venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev]"
+          echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
       - name: Ruff
         run: ruff check syntrack tests
       - name: Ruff format check
