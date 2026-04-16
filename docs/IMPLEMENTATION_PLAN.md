@@ -29,7 +29,7 @@ This plan covers **how** we build SynTrack. **What** we build is fixed by `docs/
 
 ## 0a. Shipped increments
 
-Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs); end-to-end verified each time. **188 backend + 38 frontend tests** pass; ruff / mypy / svelte-check clean.
+Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs); end-to-end verified each time. **195 backend + 38 frontend tests** pass; ruff / mypy / svelte-check clean.
 
 ### v0.1 ✅ (Phases 1 + 2 core)
 - All of Phase 1 — backend MVP, `syntrack serve` / `lint-data` CLI, tests.
@@ -58,7 +58,15 @@ Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs)
 - Sidebar highlight pills — per-genome count of SCMs inside the selection (yellow when >0, dimmed outline when 0).
 - TSV download — `scm_id, present_in, <per-genome 0/1 columns>`; filename includes the selected region.
 
-### Still deferred (v0.2+)
+### v0.2.0 🔨 (container distribution — docs/CONTAINER_DESIGN.md)
+- Multi-stage `Dockerfile` (node 22 frontend build → uv-resolved Python venv → `python:3.12-slim-bookworm` runtime as non-root `syntrack` user).
+- `deploy/docker-compose.yml` template + `deploy/README.md` quickstart, linked from the top-level README. Matching-host-path mount convention so `genomes.csv` absolute paths + `link_data.sh` symlinks resolve identically inside and outside the container.
+- CLI accepts `SYNTRACK_CONFIG` / `SYNTRACK_HOST` / `SYNTRACK_PORT` envvars; `--config` no longer required when env is set. Startup banner includes the SSH-tunnel hint when bound to `0.0.0.0`.
+- FastAPI serves the built frontend at `/` when `SYNTRACK_FRONTEND_DIR` is set; one-process image. `/healthz` endpoint (outside `/api`) for Compose / K8s probes; 200 iff SCMStore has finished loading.
+- CI: `.github/workflows/ci.yml` runs ruff / mypy / pytest + svelte-check / vitest / build + Docker build-smoke with `--version` / `--help`. Release workflow on `v*` tag pushes the image to `ghcr.io/kavonrtep/syntrack:<tag>` + `:latest`, builds a SIF via Apptainer 1.4.1, attaches SIF + sha256 + compose template + example config to the GitHub Release.
+- amd64-only for v0.2.0; arm64 added later on demand.
+
+### Still deferred (v0.2.x+)
 - `/api/fish` — *user-defined* custom paint sets (arbitrary SCM IDs / source regions become stackable colour overlays). Scope reduced because reference painting already covers the default "FISH the top genome's chromosomes" use case. Phase 3.
 - Block-param slider UI + `/api/stats/blocks` sweep diagnostics. Phase 4.
 - Exports (BED, TSV, txt, PNG/SVG). Phase 4.
@@ -499,7 +507,7 @@ Work that wasn't in the original plan but landed before moving on to Phase 3.
 
 ## 8. Test strategy summary
 
-Current totals after v0.1.3: **188 backend** (pytest) + **38 frontend** (vitest). Ruff, mypy, svelte-check all clean.
+Current totals after v0.2.0 prep: **195 backend** (pytest) + **38 frontend** (vitest). Ruff, mypy, svelte-check all clean.
 
 | Layer | Tool | What it covers |
 |---|---|---|
@@ -583,11 +591,21 @@ v0.1.3 ────────────────────────�
   Sidebar per-genome highlight pills
   TSV export: scm_id · present_in · <genome 0/1 presence columns>
 
-v0.2+ ────────────────────────────────────────────── ⏸
+v0.2.0 ──────────────────────────────────────────── 🔨 CONTAINER DISTRIBUTION
+  (docs/CONTAINER_DESIGN.md)
+  Dockerfile (frontend build → uv venv → slim runtime, non-root)
+  deploy/docker-compose.yml template + deploy/README.md quickstart
+  CLI envvars (SYNTRACK_CONFIG / _HOST / _PORT), /healthz, static mount
+  CI: ruff + mypy + pytest + svelte-check + vitest + image smoke
+  Release on v* tag: push to ghcr.io/kavonrtep/syntrack, apptainer build
+    -> SIF attached to GitHub Release
+
+v0.2.x+ ──────────────────────────────────────────── ⏸
   Phase 3.3 (custom /api/fish paint sets — §6.3, scope reduced vs original)
   Phase 4 (block-param slider UI, /stats/blocks, exports, precompute CLI,
            .npz cache, request debouncing/cancellation, axis ticks,
            tooltips, filtering-stats UI, Playwright E2E)
+  arm64 image variant if demand appears
 ```
 
 Phases 3 and 4 are independent and can be picked up in either order.

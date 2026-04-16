@@ -8,7 +8,7 @@ Genome synteny visualization tool. Multi-genome view with adjacent-pair connecti
 
 ## Status
 
-**v0.1.3 shipped.** Everything Phase 1 + 2 plus v0.1.1 reference-propagated colors & scoped zoom/pan, v0.1.2 perf fixes & double-click alignment, and v0.1.3 region highlight with fade control and TSV export. User-defined FISH paint sets (§6.3) and Phase 4 (tuning UI, exports, precompute) still deferred.
+**v0.1.3 shipped; v0.2.0 is container-distribution** (published Docker image on GHCR + Apptainer SIF as a GitHub Release asset). Everything from Phase 1 + 2 plus v0.1.1 reference-propagated colors & scoped zoom/pan, v0.1.2 perf fixes & double-click alignment, and v0.1.3 region highlight with fade control and TSV export. User-defined FISH paint sets (§6.3) and Phase 4 (tuning UI, exports, precompute) still deferred.
 
 ### Keyboard / pointer cheatsheet
 
@@ -25,7 +25,38 @@ Genome synteny visualization tool. Multi-genome view with adjacent-pair connecti
 | Download highlighted SCM IDs | ↓ SCM IDs button (TSV: scm_id · present_in · one 0/1 column per genome) |
 | Clear highlight | **Esc**, or Reset view |
 
-## Prerequisites
+## Run in a container (recommended for end users)
+
+From v0.2.0 SynTrack ships as a Docker image on `ghcr.io/kavonrtep/syntrack`
+and as an Apptainer SIF attached to each [GitHub Release](https://github.com/kavonrtep/syntrack/releases).
+End-to-end how-to including the compose template, SSH-tunnel recipe for remote
+servers, HPC Apptainer usage, mount conventions, and troubleshooting lives in
+[`deploy/README.md`](deploy/README.md).
+
+TL;DR:
+
+```bash
+# Laptop / server
+mkdir syntrack-run && cd syntrack-run
+curl -LO https://raw.githubusercontent.com/kavonrtep/syntrack/main/deploy/docker-compose.yml
+cp /path/to/your/syntrack_config.yaml .
+# edit docker-compose.yml to add `host_path:host_path:ro` mounts for each
+# directory referenced by your genomes.csv
+docker compose up
+# open http://localhost:8765
+
+# HPC (Apptainer)
+wget https://github.com/kavonrtep/syntrack/releases/download/v0.2.0/syntrack-v0.2.0.sif
+apptainer run --bind /path/to/data:/path/to/data:ro \
+  --env SYNTRACK_CONFIG=$PWD/syntrack_config.yaml \
+  syntrack-v0.2.0.sif
+```
+
+See `deploy/README.md` for the full story.
+
+## Run from source (developers)
+
+### Prerequisites
 
 - Python ≥ 3.12 (any patch version of 3.12 / 3.13 / 3.14 works)
 - Node.js ≥ 18 + npm
@@ -102,7 +133,7 @@ Prints per-genome filtering statistics. Exits non-zero on load errors.
 
 ```bash
 # Backend
-./dev.sh pytest                      # 188 tests; 9 use --integration via the real pea data
+./dev.sh pytest                      # 195 tests; 9 use --integration via the real pea data
 ./dev.sh ruff check syntrack tests
 ./dev.sh ruff format syntrack tests
 ./dev.sh mypy
@@ -112,6 +143,9 @@ cd frontend
 npm test                             # vitest, 38 tests on coords / LOD / alignment / hit-test / colors
 npm run check                        # svelte-check
 npm run build                        # production bundle into frontend/dist/
+
+# Container
+docker build -t syntrack:dev .       # matches the CI image-smoke job
 ```
 
 ## Repo layout
