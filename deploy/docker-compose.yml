@@ -41,10 +41,25 @@ services:
     # If the genome data tree contains symlinks that point outside of any of
     # the mounts above, add those targets as extra mounts too (same pattern).
 
-    # Uncomment to match your host UID/GID — only needed if the container has
-    # to write to a bind-mounted path (reserved for the Phase 4 .npz cache;
-    # not used in v0.2.0):
+    # Match host UID/GID. Uncomment if EITHER:
+    #   (a) your genome files under the mounts above aren't world-readable
+    #       (common on shared/cluster filesystems — otherwise the container's
+    #       default uid 1001 gets `PermissionError: [Errno 13] Permission
+    #       denied` when opening `.fai` / `.blast_out`), OR
+    #   (b) the container needs to write to a bind-mounted path (reserved for
+    #       the Phase 4 .npz cache; not used in v0.2.0).
+    # Invoke with `UID=$(id -u) GID=$(id -g) docker compose up` or just
+    # hardcode e.g. "1000:1000" below.
     # user: "${UID:-1000}:${GID:-1000}"
+
+    # Supplementary groups. Unlike Apptainer, Docker does NOT inherit your
+    # host user's supplementary groups — it only passes the primary gid from
+    # `user:` above. If your data lives on a shared filesystem where access
+    # is granted via a shared group or an ACL group entry (POSIX ACL, `+` in
+    # `ls -l`), list every such gid here. Check with
+    # `getfacl <dir>` and `id` on the host.
+    # group_add:
+    #   - "1009"     # e.g. trojice (example — use your actual gids)
 
     restart: unless-stopped
 

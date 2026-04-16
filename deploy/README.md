@@ -13,7 +13,10 @@ Both are built from the same Dockerfile in CI (`.github/workflows/release.yml`).
 
 ### Prerequisites
 
-- Docker ≥ 23 (or Podman with Compose plugin).
+- Docker ≥ 23 with the **Compose v2 plugin** (`docker compose`, space — not
+  the legacy `docker-compose` v1 Python client, which is EOL and crashes on
+  modern BuildKit-produced OCI manifests with `KeyError: 'ContainerConfig'`).
+  On Debian/Ubuntu: `sudo apt install docker-compose-plugin`.
 - A `syntrack_config.yaml` — start from `syntrack_config.example.yaml` in the
   repo (or attached to each GitHub Release).
 - Your genome data on a path the container can mount.
@@ -151,6 +154,34 @@ If you see `starting` for the first minute, that's normal.
 
 **Port already in use on host** — change the left side of the `ports:`
 mapping to a free port, e.g. `"9000:8765"`.
+
+**`KeyError: 'ContainerConfig'` on `docker-compose up`** — you're on the
+legacy v1 client (`docker-compose`, hyphen). Install the Compose v2 plugin
+(on Debian/Ubuntu: `sudo apt install docker-compose-v2`, or
+`docker-compose-plugin` on older releases) and use `docker compose` (space).
+
+**`PermissionError: [Errno 13]` opening `.fai` or `.blast_out`** — uid
+mismatch. The image runs as uid 1001, but your genome files are probably
+owned by your host user (uid 1000) without world-read. Uncomment the `user:`
+line in `docker-compose.yml` and launch with
+`UID=$(id -u) GID=$(id -g) docker compose up`, or hardcode `user: "1000:1000"`.
+
+**Still `PermissionError` after setting `user:`, especially on a shared
+filesystem** — Docker doesn't inherit your host user's supplementary groups
+(Apptainer does — that's why Singularity "just works" in the same setup).
+If access to the data is granted via a shared group or a POSIX ACL group
+entry (`+` in `ls -l`, confirmed with `getfacl`), add those gids to compose:
+
+```yaml
+services:
+  syntrack:
+    user: "1000:1000"
+    group_add:
+      - "1009"     # gid of the shared group that unlocks the data
+```
+
+Check what you need with `id`, `getfacl <data-dir>`, and
+`getent group <groupname>`.
 
 **Non-root writes (Phase 4)** — future `.npz` cache support will want a
 writable mount. Uncomment the `user:` line in compose and mount a
