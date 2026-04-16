@@ -20,6 +20,10 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
+          # We don't commit a uv.lock (pyproject.toml is the source of truth);
+          # invalidate the cache when pyproject changes. Leaving the default
+          # **/uv.lock glob would error on repos that don't ship one.
+          cache-dependency-glob: pyproject.toml
       - name: Install project with dev deps
         run: uv pip install --system -e ".[dev]"
       - name: Ruff
