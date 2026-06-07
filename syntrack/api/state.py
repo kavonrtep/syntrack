@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from syntrack.api.schemas import FishSetResponse
     from syntrack.cache import PairCache
     from syntrack.config import Config
     from syntrack.store.genome import GenomeStore
@@ -20,3 +21,4 @@ class AppState:
     genome_store: GenomeStore
     scm_store: SCMStore
     pair_cache: PairCache
+    fish_sets: dict[str, FishSetResponse] = field(default_factory=dict)

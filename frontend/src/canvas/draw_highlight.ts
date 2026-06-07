@@ -46,10 +46,9 @@ export function drawHighlight(
   genomesInOrder: Genome[],
   viewportFn: ViewportFn,
   canvasWidth: number,
-  canvasHeight: number,
+  _canvasHeight: number,
   layout: TrackLayout = DEFAULT_LAYOUT,
 ): void {
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight)
   if (!overlay.source && !overlay.result) return
 
   // Source rectangle (drawn first so ticks layer on top if they fall inside).

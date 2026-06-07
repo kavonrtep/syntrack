@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from syntrack import __version__
 from syntrack.api.routes_align import router as align_router
 from syntrack.api.routes_config import router as config_router
+from syntrack.api.routes_fish import router as fish_router
 from syntrack.api.routes_genomes import router as genomes_router
 from syntrack.api.routes_highlight import router as highlight_router
 from syntrack.api.routes_paint import router as paint_router
@@ -56,6 +57,7 @@ def create_app(state: AppState, *, dev_cors: bool = False) -> FastAPI:
     app.include_router(paint_router, prefix="/api")
     app.include_router(align_router, prefix="/api")
     app.include_router(highlight_router, prefix="/api")
+    app.include_router(fish_router, prefix="/api")
     app.include_router(config_router, prefix="/api")
 
     # Simple health endpoint — exposed at the root (not under /api) so it's

@@ -236,3 +236,45 @@ class ConfigUpdate(_Schema):
     """Currently only block_detection is mutable at runtime (design §3.3)."""
 
     block_detection: BlockDetectionSchema
+
+
+# ------------------------------ /api/fish ----------------------------------
+
+
+class FishPositionSchema(_Schema):
+    scm_id: str
+    seq: str
+    start: int
+    end: int
+    strand: str = Field(pattern=r"^[+-]$")
+
+
+class FishGenomeCoverage(_Schema):
+    genome_id: str
+    scm_count: int
+    positions: list[FishPositionSchema]
+
+
+class FishSetRequest(_Schema):
+    scm_ids: list[str]
+    label: str
+    color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+
+
+class FishSetSchema(_Schema):
+    """Summary of a FISH set (no positions — lightweight for list endpoint)."""
+
+    label: str
+    color: str
+    scm_count: int
+    genome_coverage: dict[str, int]
+
+
+class FishSetResponse(FishSetSchema):
+    """Full FISH set with per-genome positions."""
+
+    genomes: list[FishGenomeCoverage]
+
+
+class FishListResponse(_Schema):
+    sets: list[FishSetSchema]

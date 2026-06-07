@@ -151,6 +151,37 @@ export type HighlightResponse = {
   targets: HighlightTarget[]
 }
 
+// ------------------------------ /api/fish ----------------------------------
+
+export type FishPosition = {
+  scm_id: string
+  seq: string
+  start: number
+  end: number
+  strand: Strand
+}
+
+export type FishGenomeCoverage = {
+  genome_id: string
+  scm_count: number
+  positions: FishPosition[]
+}
+
+export type FishSetSummary = {
+  label: string
+  color: string
+  scm_count: number
+  genome_coverage: Record<string, number>
+}
+
+export type FishSetResponse = FishSetSummary & {
+  genomes: FishGenomeCoverage[]
+}
+
+export type FishListResponse = { sets: FishSetSummary[] }
+
+// ------------------------------ /api/config --------------------------------
+
 export type BlockDetection = { max_gap: number; min_block_size: number }
 export type BlastFiltering = {
   min_pident: number

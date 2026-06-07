@@ -4,6 +4,8 @@ import type {
   AlignmentResponse,
   BlocksResponse,
   ConfigResponse,
+  FishListResponse,
+  FishSetResponse,
   GenomesResponse,
   HighlightResponse,
   PairsResponse,
@@ -106,4 +108,16 @@ export const api = {
 
   config: (signal?: AbortSignal) =>
     request<ConfigResponse>('/config', {}, { signal }),
+
+  fishCreate: (scm_ids: string[], label: string, color: string) =>
+    request<FishSetResponse>('/fish', {}, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scm_ids, label, color }),
+    }),
+
+  fishList: () => request<FishListResponse>('/fish'),
+
+  fishDelete: (label: string) =>
+    request<void>(`/fish/${encodeURIComponent(label)}`, {}, { method: 'DELETE' }),
 }

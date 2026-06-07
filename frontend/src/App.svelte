@@ -6,6 +6,7 @@
   import type {
     BlocksResponse,
     ConfigResponse,
+    FishSetResponse,
     Genome,
     HighlightResponse,
     PaintRegion,
@@ -33,6 +34,7 @@
     type HighlightOverlay,
     type HighlightSource,
   } from './canvas/draw_highlight'
+  import { drawFishSets } from './canvas/draw_fish'
   import { drawRibbons, type AdjacentPair } from './canvas/draw_ribbons'
   import { drawScmLines, type AdjacentPairScms } from './canvas/draw_scms'
   import { fmtBp } from './canvas/format'
@@ -48,6 +50,8 @@
   let allGenomes = $state<Genome[] | null>(null)
   let universeSize = $state(0)
   let order = $state<string[]>([])
+  // null = "follow top genome" (default); a genome ID locks coloring to that genome.
+  let selectedReferenceId = $state<string | null>(null)
 
   let globalViewport = $state<Viewport>(DEFAULT_VIEWPORT)
   type ScopeDelta = { zoomFactor: number; centerDelta: number }
@@ -106,6 +110,21 @@
   let highlightSelection = $state<HighlightSource | null>(null)
   let highlightResult = $state<HighlightResponse | null>(null)
   let highlightDragging = $state(false)
+
+  // FISH marker sets — keyed by label.
+  const fishSets = new SvelteMap<string, FishSetResponse>()
+  const fishVisible = new SvelteSet<string>()
+  let fishLoading = $state(false)
+
+  // Small rotating palette for auto-assigning FISH set colors.
+  const FISH_PALETTE = [
+    '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
+    '#42d4f4', '#f032e6', '#bfef45', '#fabed4', '#469990',
+  ] as const
+  let fishColorIdx = 0
+  function nextFishColor(): string {
+    return FISH_PALETTE[fishColorIdx++ % FISH_PALETTE.length]
+  }
 
   // Fade slider: dims painted bars, ribbons and SCM lines so the highlight
   // overlay stands out. 0 = normal, 0.9 = very faded. Does not affect the
@@ -173,7 +192,14 @@
       .filter((g): g is Genome => g !== undefined)
   })
 
-  let referenceGenome = $derived<Genome | null>(genomesInOrder[0] ?? null)
+  let referenceGenome = $derived.by<Genome | null>(() => {
+    if (!allGenomes) return null
+    if (selectedReferenceId) {
+      const found = allGenomes.find((g) => g.id === selectedReferenceId)
+      if (found) return found
+    }
+    return genomesInOrder[0] ?? null
+  })
   let refColorMap = $derived<Map<string, string>>(
     referenceGenome ? referenceColorMap(referenceGenome) : new Map(),
   )
@@ -339,6 +365,10 @@
     void globalViewport
     const ctx = sizeAndContext(overlayCanvas, canvasWidth, canvasHeight)
     if (!ctx) return
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight)
+    // FISH ticks first (underneath highlight).
+    drawFishSets(ctx, fishSets, fishVisible, genomesInOrder, viewportFn, canvasWidth, canvasHeight)
+    // Transient highlight on top.
     const overlay: HighlightOverlay = {
       source: highlightSelection,
       isSelecting: highlightDragging,
@@ -623,6 +653,75 @@
     URL.revokeObjectURL(url)
   }
 
+  // ----------------------------- FISH marker sets --------------------------
+
+  function parseFishFile(text: string): string[] {
+    const ids: string[] = []
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim()
+      if (!line || line.startsWith('#')) continue
+      // Take first column (tab or comma separated).
+      const col = line.split(/[\t,]/)[0].trim()
+      // Skip likely header rows.
+      if (/^scm.?id$/i.test(col) || /^marker/i.test(col) || /^name$/i.test(col)) continue
+      if (col) ids.push(col)
+    }
+    return ids
+  }
+
+  let fishFileInput: HTMLInputElement | undefined = $state()
+
+  async function onFishFileSelected(): Promise<void> {
+    if (!fishFileInput?.files?.length) return
+    const file = fishFileInput.files[0]
+    const text = await file.text()
+    const ids = parseFishFile(text)
+    if (ids.length === 0) {
+      error = `No SCM IDs found in ${file.name}`
+      fishFileInput.value = ''
+      return
+    }
+    const label = file.name.replace(/\.[^.]+$/, '')
+    if (fishSets.has(label)) {
+      error = `Marker set "${label}" already loaded — delete it first or rename the file`
+      fishFileInput.value = ''
+      return
+    }
+    const color = nextFishColor()
+    fishLoading = true
+    try {
+      const resp = await api.fishCreate(ids, label, color)
+      fishSets.set(label, resp)
+      fishVisible.add(label)
+      if (resp.scm_count === 0) {
+        error = `"${label}": no matching SCMs found in loaded genomes`
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+    } finally {
+      fishLoading = false
+      fishFileInput.value = ''
+    }
+  }
+
+  async function deleteFishSet(label: string): Promise<void> {
+    try {
+      await api.fishDelete(label)
+    } catch {
+      // Best-effort server cleanup — remove locally regardless.
+    }
+    fishSets.delete(label)
+    fishVisible.delete(label)
+  }
+
+  function toggleFishSet(label: string): void {
+    if (fishVisible.has(label)) {
+      fishVisible.delete(label)
+    } else {
+      fishVisible.add(label)
+    }
+  }
+
   function onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape' && (highlightSelection || highlightResult)) {
       clearHighlight()
@@ -780,6 +879,21 @@
     <span class="meta">
       {genomesInOrder.length}/{allGenomes.length} genomes · {universeSize.toLocaleString()} SCMs
     </span>
+    <label class="ref-ctl" title="Choose which genome's chromosome palette colors all tracks and connections.">
+      Color by:
+      <select
+        value={selectedReferenceId ?? ''}
+        onchange={(e) => {
+          const v = (e.target as HTMLSelectElement).value
+          selectedReferenceId = v === '' ? null : v
+        }}
+      >
+        <option value="">(top genome)</option>
+        {#each allGenomes as g (g.id)}
+          <option value={g.id}>{g.label}</option>
+        {/each}
+      </select>
+    </label>
   {/if}
   <span
     class="hint"
@@ -834,6 +948,39 @@
               {hlCount.toLocaleString()}
             </span>
           {/if}
+        </label>
+      {/each}
+
+      <div class="sidebar-head fish-head">
+        <span class="sidebar-title">Marker Sets</span>
+        <div class="sidebar-actions">
+          <button onclick={() => fishFileInput?.click()} disabled={fishLoading}>
+            {fishLoading ? 'Loading…' : 'Load'}
+          </button>
+        </div>
+        <input
+          bind:this={fishFileInput}
+          type="file"
+          accept=".txt,.tsv,.csv"
+          style="display:none"
+          onchange={onFishFileSelected}
+        />
+      </div>
+      {#each [...fishSets] as [label, fs] (label)}
+        <label class="fish-toggle">
+          <input
+            type="checkbox"
+            checked={fishVisible.has(label)}
+            onchange={() => toggleFishSet(label)}
+          />
+          <span class="fish-swatch" style:background={fs.color}></span>
+          <span class="toggle-label">{label}</span>
+          <span class="toggle-meta">{fs.scm_count.toLocaleString()}</span>
+          <button
+            class="fish-delete"
+            title="Remove marker set"
+            onclick={(e: MouseEvent) => { e.stopPropagation(); deleteFishSet(label) }}
+          >×</button>
         </label>
       {/each}
     </aside>
@@ -926,6 +1073,24 @@
     font-size: 0.8em;
     margin-left: auto;
     cursor: help;
+  }
+
+  .ref-ctl {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    color: #aaa;
+    font-size: 0.85em;
+    user-select: none;
+  }
+
+  .ref-ctl select {
+    background: #333;
+    color: #ddd;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 0.15em 0.3em;
+    font-size: 0.95em;
   }
 
   .fade-ctl {
@@ -1040,6 +1205,53 @@
     background: transparent;
     border-color: #444;
     color: #555;
+  }
+
+  .fish-head {
+    margin-top: 0.2em;
+    border-top: 1px solid #333;
+  }
+
+  .fish-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.4em 0.8em;
+    border-bottom: 1px solid #2a2a2a;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .fish-toggle:hover {
+    background: #2a2a2a;
+  }
+
+  .fish-toggle input[type='checkbox'] {
+    margin: 0;
+    accent-color: #4ab2e0;
+  }
+
+  .fish-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .fish-delete {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: #777;
+    font-size: 1em;
+    cursor: pointer;
+    padding: 0 0.3em;
+    line-height: 1;
+  }
+
+  .fish-delete:hover {
+    color: #e44;
   }
 
   .loading,
