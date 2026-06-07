@@ -127,6 +127,101 @@ ssh -L 8765:<compute-node>:8765 <login-node>
 # open http://localhost:8765
 ```
 
+## Input data format
+
+SynTrack needs three things: a **config YAML**, a **genomes.csv** manifest, and
+per-genome **.fai** + **.blast_out** files.
+
+### genomes.csv
+
+CSV with a header row. Columns:
+
+| Column | Required | Description |
+|---|---|---|
+| `genome_id` | yes | Unique identifier for the genome |
+| `fai` | yes | Path to the `.fai` index file |
+| `SCM` | yes | Path to the BLAST `-outfmt 6` hits table |
+| `label` | no | Friendly display name (defaults to `genome_id`) |
+
+Paths are resolved **relative to the CSV file's directory** (unless absolute).
+Row order determines the initial top-to-bottom display order.
+
+```csv
+genome_id,fai,SCM
+genome_A,genome_A.fai,genome_A.blast_out
+genome_B,genome_B.fai,genome_B.blast_out
+```
+
+### .fai — FASTA index
+
+Standard `samtools faidx` output. Tab-separated, one row per sequence:
+
+```
+chr1    518136898    6          60    61
+chr2    539960455    526772525  60    61
+```
+
+SynTrack uses only the first two columns (`name` and `length`); the rest
+(byte offset, line bases, line width) are ignored.
+
+### .blast_out — BLAST hits (SCM markers)
+
+Standard BLAST `-outfmt 6` (tab-separated, no header). Each row is one hit
+of a Single Copy Marker (SCM) against the genome assembly:
+
+```
+marker_001   chr1   99.0   45   0   0   1   45   1500234   1501892   1e-50   400
+marker_002   chr3   97.8   43   1   0   1   43   891023    892501    5e-13   78
+```
+
+Key columns:
+
+| Col | Name | SynTrack use |
+|---|---|---|
+| 0 | `qseqid` | **SCM ID** — must be consistent across all genomes |
+| 1 | `sseqid` | Sequence name (must match `.fai`) |
+| 2 | `pident` | Quality filter (`min_pident`) |
+| 3 | `length` | Quality filter (`min_length`) |
+| 8 | `sstart` | Genomic start position |
+| 9 | `send` | Genomic end position |
+| 10 | `evalue` | Quality filter (`max_evalue`) |
+| 11 | `bitscore` | Uniqueness filter (best/second-best ratio) |
+
+**Strand** is inferred from coordinates: `sstart < send` means `+`, otherwise
+`-` (positions are swapped to canonical order internally).
+
+**SCM IDs are opaque strings** — SynTrack never parses their format. The same
+`qseqid` value in two genomes' BLAST tables means "same marker". Consistency
+across genomes is the user's responsibility (typically ensured by BLASTing
+every assembly against the same marker/probe set).
+
+### Generating the BLAST table
+
+```bash
+# One shared marker set, BLASTed against each assembly:
+blastn -query markers.fasta -subject genome_A.fasta \
+       -outfmt 6 -num_alignments 1 -out genome_A.blast_out
+```
+
+The key requirement is that `markers.fasta` is **the same file** for every
+genome so that `qseqid` values are consistent.
+
+### syntrack_config.yaml (minimal)
+
+```yaml
+data:
+  genomes_csv: ./genomes.csv     # path relative to this config file
+
+blast_filtering:
+  min_pident: 95.0
+  min_length: 100                # lower for short probes (e.g. 30)
+  max_evalue: 1.0e-10
+  uniqueness_ratio: 1.5
+```
+
+See `syntrack_config.example.yaml` in the repo for all available options
+(block detection, palette, rendering defaults, server settings).
+
 ## Environment variables (image defaults)
 
 | Variable | Default in image | What it does |
