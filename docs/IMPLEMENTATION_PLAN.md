@@ -58,7 +58,7 @@ Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs)
 - Sidebar highlight pills — per-genome count of SCMs inside the selection (yellow when >0, dimmed outline when 0).
 - TSV download — `scm_id, present_in, <per-genome 0/1 columns>`; filename includes the selected region.
 
-### v0.2.0 🔨 (container distribution — docs/CONTAINER_DESIGN.md)
+### v0.2.0 ✅ (container distribution — docs/CONTAINER_DESIGN.md)
 - Multi-stage `Dockerfile` (node 22 frontend build → uv-resolved Python venv → `python:3.12-slim-bookworm` runtime as non-root `syntrack` user).
 - `deploy/docker-compose.yml` template + `deploy/README.md` quickstart, linked from the top-level README. Matching-host-path mount convention so `genomes.csv` absolute paths + `link_data.sh` symlinks resolve identically inside and outside the container.
 - CLI accepts `SYNTRACK_CONFIG` / `SYNTRACK_HOST` / `SYNTRACK_PORT` envvars; `--config` no longer required when env is set. Startup banner includes the SSH-tunnel hint when bound to `0.0.0.0`.
@@ -66,8 +66,12 @@ Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs)
 - CI: `.github/workflows/ci.yml` runs ruff / mypy / pytest + svelte-check / vitest / build + Docker build-smoke with `--version` / `--help`. Release workflow on `v*` tag pushes the image to `ghcr.io/kavonrtep/syntrack:<tag>` + `:latest`, builds a SIF via Apptainer 1.4.1, attaches SIF + sha256 + compose template + example config to the GitHub Release.
 - amd64-only for v0.2.0; arm64 added later on demand.
 
+### v0.2.1 ✅ (custom markers + reference selector — #1, #2)
+- **FISH marker sets** (`POST`/`GET`/`DELETE /api/fish`): user uploads a file of SCM IDs, backend resolves positions across all genomes, frontend renders colored ticks on every track via the overlay canvas. Multiple sets can be loaded simultaneously, each with its own color and toggle.
+- **Selectable reference genome**: "Color by" dropdown in the header lets the user pick any loaded genome as the coloring reference instead of the hardcoded top genome. Backend already supported arbitrary `?reference=`; this is a frontend-only change.
+- Input data format documentation added to `deploy/README.md`.
+
 ### Still deferred (v0.2.x+)
-- `/api/fish` — *user-defined* custom paint sets (arbitrary SCM IDs / source regions become stackable colour overlays). Scope reduced because reference painting already covers the default "FISH the top genome's chromosomes" use case. Phase 3.
 - Block-param slider UI + `/api/stats/blocks` sweep diagnostics. Phase 4.
 - Exports (BED, TSV, txt, PNG/SVG). Phase 4.
 - `syntrack precompute` + on-disk `.npz` cache + manifest-hash invalidation. Phase 4.
