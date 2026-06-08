@@ -29,12 +29,15 @@ if TYPE_CHECKING:
     from syntrack.io.manifest import GenomeEntry
     from syntrack.store.genome import GenomeStore
 
+# ``start``/``end`` are *local* sequence coordinates (int32: max ~2.1 Gb per
+# sequence, guarded at load by MAX_SEQUENCE_LENGTH). ``offset`` is the
+# genome-global linear coordinate (int64: a genome can span many Gb).
 GENOME_POS_DTYPE = np.dtype(
     [
         ("scm_id_idx", np.int32),
         ("seq_idx", np.int16),
-        ("start", np.int64),
-        ("end", np.int64),
+        ("start", np.int32),
+        ("end", np.int32),
         ("strand", np.int8),
         ("offset", np.int64),  # genome-global linear coord (= seq.offset + start)
     ]
@@ -45,8 +48,8 @@ HITS_DTYPE = np.dtype(
         ("scm_id_idx", np.int32),
         ("genome_idx", np.int16),
         ("seq_idx", np.int16),
-        ("start", np.int64),
-        ("end", np.int64),
+        ("start", np.int32),
+        ("end", np.int32),
         ("strand", np.int8),
         ("offset", np.int64),
     ]

@@ -10,15 +10,17 @@ import numpy as np
 if TYPE_CHECKING:
     from syntrack.store.scm import SCMStore
 
+# Positions are *local* sequence coordinates (int32, guarded at load by
+# MAX_SEQUENCE_LENGTH ~2.1 Gb); no genome-global offset is carried here.
 PAIRWISE_DTYPE = np.dtype(
     [
         ("scm_id_idx", np.int32),
         ("g1_seq_idx", np.int16),
         ("g2_seq_idx", np.int16),
-        ("g1_start", np.int64),
-        ("g1_end", np.int64),
-        ("g2_start", np.int64),
-        ("g2_end", np.int64),
+        ("g1_start", np.int32),
+        ("g1_end", np.int32),
+        ("g2_start", np.int32),
+        ("g2_end", np.int32),
         ("g1_strand", np.int8),
         ("g2_strand", np.int8),
     ]

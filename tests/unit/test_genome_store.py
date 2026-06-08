@@ -6,7 +6,7 @@ from syntrack.config import PaletteCfg
 from syntrack.io.manifest import GenomeEntry
 from syntrack.model import Genome, Sequence
 from syntrack.palette import DEFAULT_BASE_PALETTE
-from syntrack.store.genome import GenomeStore
+from syntrack.store.genome import MAX_SEQUENCE_LENGTH, GenomeStore
 
 
 def _entry(tmp_path: Path, gid: str, sequences: list[tuple[str, int]]) -> GenomeEntry:
@@ -118,3 +118,18 @@ def test_manifest_order_preserved(tmp_path: Path) -> None:
     ]
     store = GenomeStore.load(entries, PaletteCfg())
     assert store.ids == ["Zzz", "Aaa", "Mmm"]
+
+
+def test_oversized_sequence_rejected(tmp_path: Path) -> None:
+    """A sequence longer than int32 can't be represented in the local-coord
+    arrays (start/end are int32), so loading must fail loudly, not truncate."""
+    entries = [_entry(tmp_path, "big", [("huge", MAX_SEQUENCE_LENGTH + 1)])]
+    with pytest.raises(ValueError, match=r"exceeding the .* limit for local coordinates"):
+        GenomeStore.load(entries, PaletteCfg())
+
+
+def test_max_int32_sequence_accepted(tmp_path: Path) -> None:
+    """Exactly the int32 ceiling is fine (boundary)."""
+    entries = [_entry(tmp_path, "edge", [("chr1", MAX_SEQUENCE_LENGTH)])]
+    store = GenomeStore.load(entries, PaletteCfg())
+    assert store["edge"].sequences[0].length == MAX_SEQUENCE_LENGTH

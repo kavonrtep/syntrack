@@ -33,8 +33,9 @@ def _make_pair(n: int = N, seed: int = 0) -> PairwiseSCM:
     rows = np.empty(n, dtype=PAIRWISE_DTYPE)
 
     # g1 sorted by (seq, start): sort the sequence assignment, cumulative starts.
+    # Keep cumulative coordinates within int32 (~realistic <500 Mb chromosome).
     seq = np.sort(rng.integers(0, N_SEQ, size=n)).astype(np.int16)
-    gaps = rng.integers(50, 5_000, size=n).astype(np.int64)
+    gaps = rng.integers(50, 800, size=n).astype(np.int64)
     g1_start = np.cumsum(gaps)
     # g2 tracks g1 with mostly-positive noise (order preserved); occasional
     # negative dips create order breaks, large jumps create gap breaks.

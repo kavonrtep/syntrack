@@ -13,6 +13,11 @@ if TYPE_CHECKING:
     from syntrack.config import PaletteCfg
     from syntrack.io.manifest import GenomeEntry
 
+# Local sequence coordinates (start/end) are stored as int32 in the SCM/pair
+# structured arrays to keep memory in check. Genome-global offsets stay int64,
+# so only an individual sequence longer than this is unrepresentable.
+MAX_SEQUENCE_LENGTH = 2**31 - 1
+
 
 class GenomeStore:
     """All loaded genomes plus per-genome sequence-name lookup tables."""
@@ -82,6 +87,13 @@ class GenomeStore:
             offset = 0
             sequences: list[Sequence] = []
             for name, length in fai_entries:
+                if length > MAX_SEQUENCE_LENGTH:
+                    raise ValueError(
+                        f"sequence {name!r} in genome {entry.genome_id!r} is "
+                        f"{length:,} bp, exceeding the {MAX_SEQUENCE_LENGTH:,} bp "
+                        "(int32) limit for local coordinates. Split the sequence or "
+                        "widen the start/end dtype in GENOME_POS_DTYPE/PAIRWISE_DTYPE."
+                    )
                 sequences.append(
                     Sequence(name=name, length=length, offset=offset, color=colors[name])
                 )
