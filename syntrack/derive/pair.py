@@ -80,3 +80,58 @@ def derive_pair(scm: SCMStore, g1_id: str, g2_id: str) -> PairwiseSCM:
     rows = rows[order]
 
     return PairwiseSCM(g1_id=g1_id, g2_id=g2_id, rows=rows)
+
+
+def derive_pair_on_seq(
+    scm: SCMStore,
+    g1_id: str,
+    g2_id: str,
+    g1_seq_idx: int,
+) -> PairwiseSCM:
+    """Like :func:`derive_pair` but only joins SCMs where g1 sits on ``g1_seq_idx``.
+
+    Much cheaper for alignment: filters g1 to one chromosome *before* the
+    intersect, so the join, array build, and sort all operate on ~1/N-th of
+    the data (where N = number of sequences in g1).
+    """
+    if g1_id == g2_id:
+        raise ValueError(f"derive_pair_on_seq requires distinct genomes; got both = {g1_id!r}")
+
+    a_full = scm.genome_positions[g1_id]
+    b = scm.genome_positions[g2_id]
+
+    if a_full.size == 0 or b.size == 0:
+        return PairwiseSCM(g1_id=g1_id, g2_id=g2_id, rows=np.empty(0, dtype=PAIRWISE_DTYPE))
+
+    # Pre-filter g1 to the target chromosome — typically ~1/7th of the array.
+    a = a_full[a_full["seq_idx"] == g1_seq_idx]
+    if a.size == 0:
+        return PairwiseSCM(g1_id=g1_id, g2_id=g2_id, rows=np.empty(0, dtype=PAIRWISE_DTYPE))
+
+    common, ia, ib = np.intersect1d(
+        a["scm_id_idx"],
+        b["scm_id_idx"],
+        assume_unique=True,
+        return_indices=True,
+    )
+
+    n = int(common.size)
+    rows = np.empty(n, dtype=PAIRWISE_DTYPE)
+    if n == 0:
+        return PairwiseSCM(g1_id=g1_id, g2_id=g2_id, rows=rows)
+
+    rows["scm_id_idx"] = common
+    rows["g1_seq_idx"] = a["seq_idx"][ia]
+    rows["g1_start"] = a["start"][ia]
+    rows["g1_end"] = a["end"][ia]
+    rows["g1_strand"] = a["strand"][ia]
+    rows["g2_seq_idx"] = b["seq_idx"][ib]
+    rows["g2_start"] = b["start"][ib]
+    rows["g2_end"] = b["end"][ib]
+    rows["g2_strand"] = b["strand"][ib]
+
+    # All rows have the same g1_seq_idx, so sort by g1_start only.
+    order = rows["g1_start"].argsort()
+    rows = rows[order]
+
+    return PairwiseSCM(g1_id=g1_id, g2_id=g2_id, rows=rows)

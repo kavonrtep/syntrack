@@ -28,6 +28,8 @@ from syntrack.api.schemas import (
     AlignmentSourceSchema,
 )
 from syntrack.api.state import AppState
+from syntrack.derive.block import detect_blocks
+from syntrack.derive.pair import derive_pair_on_seq
 
 if TYPE_CHECKING:
     from syntrack.derive.block import SyntenyBlock
@@ -118,12 +120,20 @@ def align(
     source_seq_idx = source_seq_names.index(seq)
 
     target_ids = targets if targets is not None else list(state.scm_store.genome_ids)
+    block_params = state.pair_cache.block_params
     mappings: list[AlignmentMappingSchema] = []
     for target_id in target_ids:
         if target_id == genome_id:
             continue
-        entry = state.pair_cache.get_or_derive(genome_id, target_id)
-        blocks_on_seq = [b for b in entry.blocks if b.g1_seq_idx == source_seq_idx]
+        # Fast path: if the full pair is already cached, slice blocks from it.
+        # Otherwise derive only the clicked chromosome — ~7x cheaper than a
+        # full-genome pair derivation.
+        cached = state.pair_cache.peek(genome_id, target_id)
+        if cached is not None:
+            blocks_on_seq = [b for b in cached.blocks if b.g1_seq_idx == source_seq_idx]
+        else:
+            pair = derive_pair_on_seq(state.scm_store, genome_id, target_id, source_seq_idx)
+            blocks_on_seq = list(detect_blocks(pair, block_params))
         result = _align_pos(blocks_on_seq, pos, k=k)
         if result is None:
             mappings.append(
