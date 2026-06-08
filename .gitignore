@@ -35,3 +35,6 @@ frontend/.svelte-kit/
 # IDE
 .idea/
 .vscode/
+
+# pytest-benchmark run data (machine-specific)
+.benchmarks/

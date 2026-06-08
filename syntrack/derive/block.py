@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
+
 from syntrack.derive.pair import PairwiseSCM
 
 
@@ -45,7 +47,7 @@ class SyntenyBlock:
     scm_row_end: int
 
 
-def detect_blocks(pair: PairwiseSCM, params: BlockParams) -> list[SyntenyBlock]:  # noqa: PLR0915
+def detect_blocks(pair: PairwiseSCM, params: BlockParams) -> list[SyntenyBlock]:
     """Scan a sorted PairwiseSCM and emit strict-order collinear blocks.
 
     Continuity rules (all must hold to extend a block):
@@ -56,86 +58,80 @@ def detect_blocks(pair: PairwiseSCM, params: BlockParams) -> list[SyntenyBlock]:
 
     Blocks with fewer than ``min_block_size`` SCMs are dropped.
 
-    Complexity: O(n) over the sorted rows.
+    Vectorized: every continuity rule is a property of two *adjacent* rows (within
+    a block, strand and sequence are constant, so "matches the block anchor" and
+    "matches the previous row" coincide). We compute a per-adjacency break mask,
+    derive segment boundaries from it, reduce each segment's bounds with numpy
+    ufunc ``reduceat``, and only materialize Python objects for blocks that pass
+    the ``min_block_size`` filter. O(n) work, but in C rather than per-row Python.
     """
     rows = pair.rows
     n = int(rows.size)
     if n == 0:
         return []
 
-    blocks: list[SyntenyBlock] = []
-    block_id_counter = 0
+    g1_seq = rows["g1_seq_idx"]
+    g2_seq = rows["g2_seq_idx"]
+    g1_start = rows["g1_start"]
+    g1_end = rows["g1_end"]
+    g2_start = rows["g2_start"]
+    g2_end = rows["g2_end"]
+    # int16 product avoids int8 overflow and keeps the comparison cheap.
+    strand = rows["g1_strand"].astype(np.int16) * rows["g2_strand"].astype(np.int16)
 
-    # State of the current block.
-    cur_first_idx = 0
-    cur_g1_seq = int(rows[0]["g1_seq_idx"])
-    cur_g2_seq = int(rows[0]["g2_seq_idx"])
-    cur_strand = int(rows[0]["g1_strand"]) * int(rows[0]["g2_strand"])
-    cur_g1_start = int(rows[0]["g1_start"])
-    cur_g1_end = int(rows[0]["g1_end"])
-    cur_g2_start = int(rows[0]["g2_start"])
-    cur_g2_end = int(rows[0]["g2_end"])
-    prev_g1_start = int(rows[0]["g1_start"])
-    prev_g2_start = int(rows[0]["g2_start"])
-
-    def _close_block(end_idx_exclusive: int) -> None:
-        nonlocal block_id_counter
-        size = end_idx_exclusive - cur_first_idx
-        if size >= params.min_block_size:
-            block_id_counter += 1
-            blocks.append(
-                SyntenyBlock(
-                    block_id=block_id_counter,
-                    g1_seq_idx=cur_g1_seq,
-                    g1_start=cur_g1_start,
-                    g1_end=cur_g1_end,
-                    g2_seq_idx=cur_g2_seq,
-                    g2_start=cur_g2_start,
-                    g2_end=cur_g2_end,
-                    relative_strand=cur_strand,
-                    scm_count=size,
-                    scm_row_start=cur_first_idx,
-                    scm_row_end=end_idx_exclusive,
-                )
-            )
-
-    for i in range(1, n):
-        row = rows[i]
-        g1_seq = int(row["g1_seq_idx"])
-        g2_seq = int(row["g2_seq_idx"])
-        strand = int(row["g1_strand"]) * int(row["g2_strand"])
-        g1_start = int(row["g1_start"])
-        g1_end = int(row["g1_end"])
-        g2_start = int(row["g2_start"])
-        g2_end = int(row["g2_end"])
-
-        same_strand = strand == cur_strand
-        same_seqs = g1_seq == cur_g1_seq and g2_seq == cur_g2_seq
-        within_gap = (g1_start - prev_g1_start) <= params.max_gap and abs(
-            g2_start - prev_g2_start
-        ) <= params.max_gap
-        order_preserved = (cur_strand == 1 and g2_start > prev_g2_start) or (
-            cur_strand == -1 and g2_start < prev_g2_start
+    if n == 1:
+        seg_start = np.array([0], dtype=np.intp)
+    else:
+        left_strand = strand[:-1]
+        g2_prev = g2_start[:-1]
+        g2_next = g2_start[1:]
+        same_strand = strand[1:] == left_strand
+        same_seq = (g1_seq[1:] == g1_seq[:-1]) & (g2_seq[1:] == g2_seq[:-1])
+        within_gap = ((g1_start[1:] - g1_start[:-1]) <= params.max_gap) & (
+            np.abs(g2_next - g2_prev) <= params.max_gap
         )
+        # Order direction follows the left row's strand (constant within a block).
+        order_ok = ((left_strand == 1) & (g2_next > g2_prev)) | (
+            (left_strand == -1) & (g2_next < g2_prev)
+        )
+        breaks = ~(same_strand & same_seq & within_gap & order_ok)
+        # A break between rows j and j+1 opens a new segment at j+1.
+        seg_start = np.empty(int(np.count_nonzero(breaks)) + 1, dtype=np.intp)
+        seg_start[0] = 0
+        seg_start[1:] = np.flatnonzero(breaks) + 1
 
-        if same_strand and same_seqs and within_gap and order_preserved:
-            # Extend current block.
-            cur_g1_end = max(cur_g1_end, g1_end)
-            cur_g2_start = min(cur_g2_start, g2_start)
-            cur_g2_end = max(cur_g2_end, g2_end)
-        else:
-            _close_block(i)
-            cur_first_idx = i
-            cur_g1_seq = g1_seq
-            cur_g2_seq = g2_seq
-            cur_strand = strand
-            cur_g1_start = g1_start
-            cur_g1_end = g1_end
-            cur_g2_start = g2_start
-            cur_g2_end = g2_end
+    seg_end = np.empty_like(seg_start)
+    seg_end[:-1] = seg_start[1:]
+    seg_end[-1] = n
+    seg_count = seg_end - seg_start
 
-        prev_g1_start = g1_start
-        prev_g2_start = g2_start
+    keep = seg_count >= params.min_block_size
+    if not keep.any():
+        return []
 
-    _close_block(n)
+    # Per-segment bound reductions over the full segmentation (cheap; one C pass
+    # each). Anchors (g1_start, seq, strand) come from each segment's first row,
+    # which is the minimum within the block because rows are g1-sorted.
+    g1_end_max = np.maximum.reduceat(g1_end, seg_start)
+    g2_start_min = np.minimum.reduceat(g2_start, seg_start)
+    g2_end_max = np.maximum.reduceat(g2_end, seg_start)
+
+    blocks: list[SyntenyBlock] = []
+    for block_id, seg in enumerate(np.flatnonzero(keep), start=1):
+        s = int(seg_start[seg])
+        blocks.append(
+            SyntenyBlock(
+                block_id=block_id,
+                g1_seq_idx=int(g1_seq[s]),
+                g1_start=int(g1_start[s]),
+                g1_end=int(g1_end_max[seg]),
+                g2_seq_idx=int(g2_seq[s]),
+                g2_start=int(g2_start_min[seg]),
+                g2_end=int(g2_end_max[seg]),
+                relative_strand=int(strand[s]),
+                scm_count=int(seg_count[seg]),
+                scm_row_start=s,
+                scm_row_end=int(seg_end[seg]),
+            )
+        )
     return blocks

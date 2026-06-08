@@ -10,6 +10,7 @@ from syntrack.config import Config, load_config
 from syntrack.derive.block import BlockParams
 from syntrack.io.blast import BlastFilterParams
 from syntrack.io.manifest import read_manifest
+from syntrack.perf import timed
 from syntrack.store.genome import GenomeStore
 from syntrack.store.scm import SCMStore
 
@@ -34,8 +35,10 @@ def load_app_state(config_path: Path) -> AppState:
     """Build a fully-populated AppState from a config file."""
     cfg = load_config(config_path)
     manifest = read_manifest(cfg.data.genomes_csv)
-    genome_store = GenomeStore.load(manifest, cfg.palette, cfg.genome_labels)
-    scm_store = SCMStore.load(manifest, _to_filter_params(cfg), genome_store)
+    with timed("load.genome_store", n_genomes=len(manifest)):
+        genome_store = GenomeStore.load(manifest, cfg.palette, cfg.genome_labels)
+    with timed("load.scm_store", n_genomes=len(manifest)):
+        scm_store = SCMStore.load(manifest, _to_filter_params(cfg), genome_store)
     block_params = _to_block_params(cfg)
     pair_cache = PairCache(
         scm_store,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,7 @@ from syntrack.api.routes_paint import router as paint_router
 from syntrack.api.routes_pairs import router as pairs_router
 from syntrack.api.routes_scm import router as scm_router
 from syntrack.api.routes_synteny import router as synteny_router
+from syntrack.perf import request_timings, server_timing_header
 
 if TYPE_CHECKING:
     from syntrack.api.state import AppState
@@ -40,6 +42,21 @@ def create_app(state: AppState, *, dev_cors: bool = False) -> FastAPI:
     """
     app = FastAPI(title="SynTrack", version=__version__)
     app.state.app_state = state
+
+    @app.middleware("http")
+    async def _server_timing(request, call_next):  # type: ignore[no-untyped-def]
+        """Time each request and expose backend sub-timings as ``Server-Timing``.
+
+        Opens a per-request scope so ``perf.timed`` spans inside the handler
+        (e.g. pair derivation, block detection) accumulate and surface in the
+        browser's Network → Timing panel without any client wiring.
+        """
+        start = time.perf_counter()
+        with request_timings() as scope:
+            response = await call_next(request)
+        total_ms = (time.perf_counter() - start) * 1000.0
+        response.headers["Server-Timing"] = server_timing_header(total_ms, scope)
+        return response
 
     if dev_cors:
         app.add_middleware(

@@ -123,7 +123,9 @@ def serve(
 
     from syntrack.api.app import create_app
     from syntrack.loader import load_app_state
+    from syntrack.perf import configure_logging
 
+    configure_logging()
     config_path = _require_config(config_path)
 
     state = load_app_state(config_path)

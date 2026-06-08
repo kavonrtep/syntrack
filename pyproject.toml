@@ -42,7 +42,8 @@ packages = ["syntrack"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers --benchmark-skip"
 markers = [
     "integration: requires example_data/ symlinks; slow",
+    "benchmark: performance benchmark; skipped unless --benchmark-only",
 ]

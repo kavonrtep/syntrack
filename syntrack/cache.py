@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from syntrack.derive.block import BlockParams, SyntenyBlock, detect_blocks
 from syntrack.derive.pair import PairwiseSCM, derive_pair
+from syntrack.perf import timed
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -106,8 +107,10 @@ class PairCache:
                     return cached
                 bp = self._block_params
 
-            pair = derive_pair(self._scm, g1_id, g2_id)
-            blocks = tuple(detect_blocks(pair, bp))
+            with timed("derive_pair", pair=f"{g1_id}->{g2_id}"):
+                pair = derive_pair(self._scm, g1_id, g2_id)
+            with timed("detect_blocks", pair=f"{g1_id}->{g2_id}", n=pair.n_shared):
+                blocks = tuple(detect_blocks(pair, bp))
             entry = CacheEntry(pair=pair, blocks=blocks)
 
             with self._lock:
