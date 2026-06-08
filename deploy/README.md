@@ -70,6 +70,15 @@ docker compose down        # stop + remove
 
 Then open http://localhost:8765 in a browser.
 
+### Updating to a new release
+
+Docker caches images locally, so `docker compose up` won't pull a newer
+`:latest` on its own. Force a fresh pull first:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
 ### Remote server (SSH tunnel)
 
 When you run compose on a remote host, forward the port to your laptop:
