@@ -754,9 +754,10 @@
   }
 
   let lastAlignmentSummary = $state<string | null>(null)
+  let aligning = $state(false)
 
   async function onDoubleClick(e: MouseEvent) {
-    if (!trackCanvas) return
+    if (!trackCanvas || aligning) return
     const rect = trackCanvas.getBoundingClientRect()
     const cx = e.clientX - rect.left
     const cy = e.clientY - rect.top
@@ -777,13 +778,21 @@
     }
     const posLocal = Math.max(0, Math.round(clamped - clickedSeq.offset))
 
+    // Only align against visible genomes (skip the anchor itself).
+    const targets = genomesInOrder.filter((g) => g.id !== anchor.id).map((g) => g.id)
+
+    aligning = true
+    lastAlignmentSummary = 'aligning…'
     let resp
     try {
-      resp = await api.align(anchor.id, clickedSeq.name, posLocal)
+      resp = await api.align(anchor.id, clickedSeq.name, posLocal, { targets })
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
+      aligning = false
+      lastAlignmentSummary = null
       return
     }
+    aligning = false
 
     let aligned = 0
     let missed = 0
@@ -1018,7 +1027,7 @@
       class="canvas-container"
       role="application"
       aria-label="Synteny canvas"
-      style:cursor={dragState ? 'grabbing' : 'grab'}
+      style:cursor={aligning ? 'wait' : dragState ? 'grabbing' : 'grab'}
       onwheel={onWheel}
       onpointerdown={onPointerDown}
       onpointermove={onPointerMove}

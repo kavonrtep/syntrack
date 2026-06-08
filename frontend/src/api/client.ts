@@ -90,14 +90,27 @@ export const api = {
     genomeId: string,
     seq: string,
     pos: number,
-    opts: { k?: number } = {},
+    opts: { k?: number; targets?: string[] } = {},
     signal?: AbortSignal,
-  ) =>
-    request<AlignmentResponse>(
-      '/align',
-      { genome_id: genomeId, seq, pos, ...opts },
-      { signal },
-    ),
+  ) => {
+    const { targets, ...scalar } = opts
+    const url = new URL(API_BASE + '/align', window.location.origin)
+    url.searchParams.set('genome_id', genomeId)
+    url.searchParams.set('seq', seq)
+    url.searchParams.set('pos', String(pos))
+    if (scalar.k !== undefined) url.searchParams.set('k', String(scalar.k))
+    if (targets) for (const t of targets) url.searchParams.append('targets', t)
+    return fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal,
+    }).then(async (resp) => {
+      if (!resp.ok) {
+        const body = await resp.text()
+        throw new Error(`API ${resp.status} ${resp.statusText} on /align: ${body}`)
+      }
+      return (await resp.json()) as AlignmentResponse
+    })
+  },
 
   highlight: (genomeId: string, region: string, signal?: AbortSignal) =>
     request<HighlightResponse>(

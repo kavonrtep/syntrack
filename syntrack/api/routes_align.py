@@ -104,6 +104,9 @@ def align(
     seq: str = Query(..., description="Clicked sequence name on the anchor."),
     pos: int = Query(..., ge=0, description="0-based click position on that sequence."),
     k: int = Query(3, ge=1, le=20, description="Number of nearest blocks to consider."),
+    targets: list[str] | None = Query(
+        None, description="Target genome IDs to align against. If omitted, all genomes."
+    ),
     state: AppState = Depends(get_state),
 ) -> AlignmentResponse:
     if genome_id not in state.genome_store:
@@ -114,8 +117,9 @@ def align(
         raise HTTPException(404, f"unknown sequence {seq!r} in genome {genome_id!r}")
     source_seq_idx = source_seq_names.index(seq)
 
+    target_ids = targets if targets is not None else list(state.scm_store.genome_ids)
     mappings: list[AlignmentMappingSchema] = []
-    for target_id in state.scm_store.genome_ids:
+    for target_id in target_ids:
         if target_id == genome_id:
             continue
         entry = state.pair_cache.get_or_derive(genome_id, target_id)
