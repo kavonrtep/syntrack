@@ -19,7 +19,7 @@ export const HIGHLIGHT_FILL_PENDING = 'rgba(255, 220, 50, 0.16)'
 export const HIGHLIGHT_FILL_CONFIRMED = 'rgba(255, 220, 50, 0.28)'
 
 export type HighlightSource = {
-  genomeIdx: number
+  genomeId: string
   genome: Genome
   seq: string
   /** Local bp (0-based) in ``seq``. Half-open [startBp, endBp) after sort. */
@@ -53,7 +53,9 @@ export function drawHighlight(
 
   // Source rectangle (drawn first so ticks layer on top if they fall inside).
   if (overlay.source) {
-    const { genomeIdx, genome, seq, startBp, endBp } = overlay.source
+    const { genomeId, genome, seq, startBp, endBp } = overlay.source
+    const currentIdx = genomesInOrder.findIndex((g) => g.id === genomeId)
+    if (currentIdx < 0) return // genome hidden after reorder — skip drawing
     const vp = viewportFn(genome.id)
     const seqObj = genome.sequences.find((s) => s.name === seq)
     if (seqObj) {
@@ -64,7 +66,7 @@ export function drawHighlight(
       const x0 = Math.max(0, Math.min(canvasWidth, rawX0))
       const x1 = Math.max(0, Math.min(canvasWidth, rawX1))
       const w = Math.max(1, x1 - x0)
-      const y = trackY(genomeIdx, layout)
+      const y = trackY(currentIdx, layout)
       ctx.fillStyle = overlay.isSelecting ? HIGHLIGHT_FILL_PENDING : HIGHLIGHT_FILL_CONFIRMED
       ctx.fillRect(x0, y, w, layout.trackHeight)
       ctx.strokeStyle = HIGHLIGHT_ACCENT

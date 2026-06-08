@@ -33,6 +33,7 @@ class BlockDetection(_StrictModel):
 
 class PairCacheCfg(_StrictModel):
     max_pairs: int = 30
+    paint_max_pairs: int = 20
 
 
 class ServerCfg(_StrictModel):

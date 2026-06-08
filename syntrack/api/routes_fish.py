@@ -32,6 +32,7 @@ def _strand_str(strand: int) -> str:
 def _resolve_fish_set(
     req: FishSetRequest,
     state: AppState,
+    limit: int = 500,
 ) -> FishSetResponse:
     """Resolve SCM IDs to positions across all genomes."""
     # Map requested SCM IDs to universe indices, silently skipping unknowns.
@@ -70,6 +71,9 @@ def _resolve_fish_set(
             continue
 
         genome = state.genome_store[genome_id]
+        total_count = int(matching.size)
+        truncated = limit > 0 and total_count > limit
+        to_emit = matching[:limit] if truncated else matching
         positions = [
             FishPositionSchema(
                 scm_id=universe[int(row["scm_id_idx"])],
@@ -78,11 +82,16 @@ def _resolve_fish_set(
                 end=int(row["end"]),
                 strand=_strand_str(int(row["strand"])),
             )
-            for row in matching
+            for row in to_emit
         ]
-        genome_coverage[genome_id] = len(positions)
+        genome_coverage[genome_id] = total_count
         genomes.append(
-            FishGenomeCoverage(genome_id=genome_id, scm_count=len(positions), positions=positions)
+            FishGenomeCoverage(
+                genome_id=genome_id,
+                scm_count=total_count,
+                positions=positions,
+                truncated=truncated,
+            )
         )
 
     return FishSetResponse(

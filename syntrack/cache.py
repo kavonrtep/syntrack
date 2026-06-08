@@ -9,6 +9,7 @@ re-runs :func:`detect_blocks` (design §3.3).
 
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -36,7 +37,7 @@ class PairCache:
     underlying data with swapped roles needs a separate derivation).
     """
 
-    __slots__ = ("_block_params", "_cache", "_cap", "_scm")
+    __slots__ = ("_block_params", "_cache", "_cap", "_key_locks", "_meta_lock", "_scm")
 
     def __init__(
         self,
@@ -50,6 +51,8 @@ class PairCache:
         self._cap = max_pairs
         self._block_params = block_params
         self._cache: OrderedDict[tuple[str, str], CacheEntry] = OrderedDict()
+        self._meta_lock = threading.Lock()
+        self._key_locks: dict[tuple[str, str], threading.Lock] = {}
 
     # ------------------------------ Properties ------------------------------
 
@@ -73,19 +76,26 @@ class PairCache:
     # ------------------------------ Access ----------------------------------
 
     def get_or_derive(self, g1_id: str, g2_id: str) -> CacheEntry:
-        """Return the cached entry for ``(g1_id, g2_id)``, deriving on miss."""
-        key = (g1_id, g2_id)
-        cached = self._cache.get(key)
-        if cached is not None:
-            self._cache.move_to_end(key)
-            return cached
+        """Return the cached entry for ``(g1_id, g2_id)``, deriving on miss.
 
-        pair = derive_pair(self._scm, g1_id, g2_id)
-        blocks = tuple(detect_blocks(pair, self._block_params))
-        entry = CacheEntry(pair=pair, blocks=blocks)
-        self._cache[key] = entry
-        self._evict_if_full()
-        return entry
+        Thread-safe: concurrent requests for the same key share a single
+        in-progress derivation via per-key locking (single-flight pattern).
+        """
+        key = (g1_id, g2_id)
+        with self._meta_lock:
+            lock = self._key_locks.setdefault(key, threading.Lock())
+        with lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                self._cache.move_to_end(key)
+                return cached
+
+            pair = derive_pair(self._scm, g1_id, g2_id)
+            blocks = tuple(detect_blocks(pair, self._block_params))
+            entry = CacheEntry(pair=pair, blocks=blocks)
+            self._cache[key] = entry
+            self._evict_if_full()
+            return entry
 
     def peek(self, g1_id: str, g2_id: str) -> CacheEntry | None:
         """Return the cached entry without recording an access (no LRU bump, no derive)."""

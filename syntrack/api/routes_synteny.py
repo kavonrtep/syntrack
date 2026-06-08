@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 from syntrack.api.deps import get_state
 from syntrack.api.regions import parse_region
 from syntrack.api.schemas import (
     BlocksResponse,
-    PairwiseSCMSchema,
     SCMsResponse,
     SyntenyBlockSchema,
 )
@@ -173,7 +175,7 @@ def get_scms(
         "reference_seq names the reference sequence that contains it.",
     ),
     state: AppState = Depends(get_state),
-) -> SCMsResponse:
+) -> Response:
     """Return SCM-level pairwise rows. Used for LOD-high (zoomed-in) rendering."""
     _validate_pair(state, g1, g2)
     ref_seq_map, ref_seq_names = _resolve_reference(state, reference)
@@ -203,29 +205,34 @@ def get_scms(
 
     universe = state.scm_store.universe
 
-    def _ref_name(scm_id_idx: int) -> str | None:
-        if ref_seq_map is None or ref_seq_names is None:
-            return None
-        ref_idx = int(ref_seq_map[scm_id_idx])
-        return ref_seq_names[ref_idx] if ref_idx >= 0 else None
+    scms: list[dict[str, object]] = []
+    for row in rows_out:
+        scm_id_idx = int(row["scm_id_idx"])
+        ref_name: str | None = None
+        if ref_seq_map is not None and ref_seq_names is not None:
+            ref_idx = int(ref_seq_map[scm_id_idx])
+            ref_name = ref_seq_names[ref_idx] if ref_idx >= 0 else None
+        scms.append(
+            {
+                "scm_id": universe[scm_id_idx],
+                "g1_seq": g1_seq_names[int(row["g1_seq_idx"])],
+                "g1_start": int(row["g1_start"]),
+                "g1_end": int(row["g1_end"]),
+                "g2_seq": g2_seq_names[int(row["g2_seq_idx"])],
+                "g2_start": int(row["g2_start"]),
+                "g2_end": int(row["g2_end"]),
+                "strand": _strand_str(int(row["g1_strand"]) * int(row["g2_strand"])),
+                "reference_seq": ref_name,
+            }
+        )
 
-    return SCMsResponse(
-        pair=(g1, g2),
-        total_in_region=total_in_region,
-        returned=int(rows_out.size),
-        downsampled=downsampled,
-        scms=[
-            PairwiseSCMSchema(
-                scm_id=universe[int(row["scm_id_idx"])],
-                g1_seq=g1_seq_names[int(row["g1_seq_idx"])],
-                g1_start=int(row["g1_start"]),
-                g1_end=int(row["g1_end"]),
-                g2_seq=g2_seq_names[int(row["g2_seq_idx"])],
-                g2_start=int(row["g2_start"]),
-                g2_end=int(row["g2_end"]),
-                strand=_strand_str(int(row["g1_strand"]) * int(row["g2_strand"])),
-                reference_seq=_ref_name(int(row["scm_id_idx"])),
-            )
-            for row in rows_out
-        ],
+    body = json.dumps(
+        {
+            "pair": [g1, g2],
+            "total_in_region": total_in_region,
+            "returned": int(rows_out.size),
+            "downsampled": downsampled,
+            "scms": scms,
+        }
     )
+    return Response(content=body, media_type="application/json")

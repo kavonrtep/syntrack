@@ -61,6 +61,7 @@ class SCMStore:
         "_hits_flat",
         "_hits_offsets",
         "_ref_seq_map_cache",
+        "_shared_counts",
         "filtering_stats",
         "genome_id_to_idx",
         "genome_ids",
@@ -100,6 +101,11 @@ class SCMStore:
         self._hits_flat = hits_flat
         self._genome_store = genome_store
         self._ref_seq_map_cache: dict[str, np.ndarray] = {}
+        self._shared_counts = _precompute_shared_counts(
+            universe_size=len(universe),
+            genome_ids=genome_ids,
+            genome_positions=genome_positions,
+        )
 
     # ------------------------------ Properties ------------------------------
 
@@ -155,10 +161,9 @@ class SCMStore:
         return self.positions_of(idx)
 
     def shared_count(self, g1_id: str, g2_id: str) -> int:
-        """Number of SCMs present in both genomes (cheap; no pairwise materialization)."""
-        a = self.genome_positions[g1_id]["scm_id_idx"]
-        b = self.genome_positions[g2_id]["scm_id_idx"]
-        return int(np.intersect1d(a, b, assume_unique=True).size)
+        """Number of SCMs present in both genomes (O(1) lookup, precomputed at load)."""
+        key = (g1_id, g2_id) if g1_id <= g2_id else (g2_id, g1_id)
+        return self._shared_counts[key]
 
     def reference_seq_map(self, ref_genome_id: str) -> np.ndarray:
         """Return an ``int32`` vector of shape ``(universe_size,)``.
@@ -170,14 +175,12 @@ class SCMStore:
         cached = self._ref_seq_map_cache.get(ref_genome_id)
         if cached is not None:
             return cached
-        if ref_genome_id not in self.genome_id_to_idx:
+        if ref_genome_id not in self.genome_positions:
             raise KeyError(ref_genome_id)
-        ref_idx = self.genome_id_to_idx[ref_genome_id]
-        mask = self._hits_flat["genome_idx"] == ref_idx
-        ref_hits = self._hits_flat[mask]
+        ref_pos = self.genome_positions[ref_genome_id]
         out = np.full(self.universe_size, -1, dtype=np.int32)
-        if ref_hits.size > 0:
-            out[ref_hits["scm_id_idx"]] = ref_hits["seq_idx"]
+        if ref_pos.size > 0:
+            out[ref_pos["scm_id_idx"]] = ref_pos["seq_idx"]
         out.flags.writeable = False  # treat as immutable once cached
         self._ref_seq_map_cache[ref_genome_id] = out
         return out
@@ -219,13 +222,26 @@ class SCMStore:
 
         genome_ids = [e.genome_id for e in manifest]
 
+        # Build the universe lookup DataFrame once and reuse it for all genomes
+        # (avoids rebuilding a 1M+ row DataFrame per genome).
+        if universe_index:
+            universe_lookup = pl.DataFrame(
+                {
+                    "scm_id": list(universe_index.keys()),
+                    "scm_id_idx": list(universe_index.values()),
+                },
+                schema={"scm_id": pl.String, "scm_id_idx": pl.Int32},
+            )
+        else:
+            universe_lookup = None
+
         # Step 3 — convert each per-genome DataFrame to a structured numpy array.
         genome_positions: dict[str, np.ndarray] = {}
         for entry in manifest:
-            df = per_genome_dfs[entry.genome_id]
+            df = per_genome_dfs.pop(entry.genome_id)  # pop to release memory
             arr = _df_to_genome_positions(
                 df,
-                universe_index=universe_index,
+                universe_lookup=universe_lookup,
                 genome=genome_store[entry.genome_id],
             )
             genome_positions[entry.genome_id] = arr
@@ -254,21 +270,13 @@ class SCMStore:
 def _df_to_genome_positions(
     df: pl.DataFrame,
     *,
-    universe_index: dict[str, int],
+    universe_lookup: pl.DataFrame | None,
     genome: object,  # syntrack.model.Genome — annotated as object to avoid TYPE_CHECKING dance
 ) -> np.ndarray:
     """Convert a filtered BLAST DataFrame to a structured array sorted by global offset."""
-    if df.height == 0:
+    if df.height == 0 or universe_lookup is None:
         return np.empty(0, dtype=GENOME_POS_DTYPE)
 
-    # Build polars-side lookup tables for vectorized index/offset assignment.
-    universe_lookup = pl.DataFrame(
-        {
-            "scm_id": list(universe_index.keys()),
-            "scm_id_idx": list(universe_index.values()),
-        },
-        schema={"scm_id": pl.String, "scm_id_idx": pl.Int32},
-    )
     seq_names = [s.name for s in genome.sequences]  # type: ignore[attr-defined]
     seq_lookup = pl.DataFrame(
         {
@@ -331,3 +339,30 @@ def _build_global_lookup(
     ).astype(np.int64)
 
     return hits_offsets, hits_flat
+
+
+def _precompute_shared_counts(
+    *,
+    universe_size: int,
+    genome_ids: list[str],
+    genome_positions: dict[str, np.ndarray],
+) -> dict[tuple[str, str], int]:
+    """Precompute shared SCM counts for all unordered genome pairs via boolean masks."""
+    # Build per-genome boolean presence masks.
+    masks: dict[str, np.ndarray] = {}
+    for gid in genome_ids:
+        m = np.zeros(universe_size, dtype=np.bool_)
+        arr = genome_positions[gid]
+        if arr.size > 0:
+            m[arr["scm_id_idx"]] = True
+        masks[gid] = m
+
+    counts: dict[tuple[str, str], int] = {}
+    for i, g1 in enumerate(genome_ids):
+        for g2 in genome_ids[i:]:
+            key = (g1, g2)
+            if g1 == g2:
+                counts[key] = int(np.count_nonzero(masks[g1]))
+            else:
+                counts[key] = int(np.count_nonzero(masks[g1] & masks[g2]))
+    return counts

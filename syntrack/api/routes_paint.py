@@ -64,7 +64,7 @@ def get_paint(
     # Paint = blocks of pair (genome_id, reference), projected onto genome_id.
     # The pair cache reuses the same BlockParams as adjacent-pair ribbons, so
     # updating block_detection via PUT /api/config updates both in lockstep.
-    entry = state.pair_cache.get_or_derive(genome_id, reference)
+    entry = state.paint_cache.get_or_derive(genome_id, reference)
 
     ref_seq_names = [s.name for s in state.genome_store[reference].sequences]
     genome_seq_names = [s.name for s in state.genome_store[genome_id].sequences]

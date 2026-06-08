@@ -54,4 +54,5 @@ def update_config(
         min_block_size=update.block_detection.min_block_size,
     )
     state.pair_cache.update_block_params(new_params)
+    state.paint_cache.update_block_params(new_params)
     return _serialize(state)

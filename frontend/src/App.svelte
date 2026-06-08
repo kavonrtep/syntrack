@@ -21,6 +21,7 @@
     pixelsPerBp,
     pxToBp,
     visibleRange,
+    visibleRegionString,
     zoomAtFraction,
     type Viewport,
   } from './canvas/coords'
@@ -89,12 +90,31 @@
   let canvasWidth = $state(800)
   let canvasHeight = $state(600)
 
-  // Data caches: plain Maps to avoid per-item reactive overhead. A single
+  // Data caches: LRU-capped Maps to avoid per-item reactive overhead and
+  // unbounded memory growth across reference/reorder changes. A single
   // reactive counter bumps once per batch of responses so deriveds/effects
   // recompute only once instead of N times.
-  const pairBlocks = new Map<string, BlocksResponse>()
-  const pairScms = new Map<string, SCMsResponse>()
-  const paintByPair = new Map<string, PaintRegion[]>()
+  class LRUMap<K, V> extends Map<K, V> {
+    _cap: number
+    constructor(cap: number) { super(); this._cap = cap }
+    override get(key: K): V | undefined {
+      const v = super.get(key)
+      if (v !== undefined) { super.delete(key); super.set(key, v) }
+      return v
+    }
+    override set(key: K, value: V): this {
+      if (super.has(key)) super.delete(key)
+      super.set(key, value)
+      while (super.size > this._cap) {
+        const oldest = super.keys().next().value!
+        super.delete(oldest)
+      }
+      return this
+    }
+  }
+  const pairBlocks = new LRUMap<string, BlocksResponse>(50)
+  const pairScms = new LRUMap<string, SCMsResponse>(30)
+  const paintByPair = new LRUMap<string, PaintRegion[]>(40)
   let dataVersion = $state(0)
   // Plain counter — not reactive. Exposed to the template via dataVersion bumps.
   let _loadingCount = 0
@@ -320,34 +340,57 @@
     })
   })
 
+  // SCM fetching: viewport-filtered with debounce.
+  // Clear cached SCMs when viewport changes so the next fetch uses fresh regions.
+  let scmsDebounceTimer: ReturnType<typeof setTimeout> | undefined
+
   $effect(() => {
     scmsAbort?.abort()
     scmsAbort = new AbortController()
-    const { signal } = scmsAbort
+    clearTimeout(scmsDebounceTimer)
     if (lodModeValue !== 'scm') return
     const ref = referenceGenome?.id
     if (!ref) return
-    const pending: { key: string; promise: Promise<SCMsResponse> }[] = []
-    for (let i = 0; i < genomesInOrder.length - 1; i++) {
-      const g1 = genomesInOrder[i].id
-      const g2 = genomesInOrder[i + 1].id
-      const key = pairKey(g1, g2, ref)
-      if (pairScms.has(key)) continue
-      pending.push({ key, promise: api.scms(g1, g2, { reference: ref }, signal) })
-    }
-    if (pending.length === 0) return
-    _loadingCount += pending.length
-    loadingData = true
-    void Promise.allSettled(pending.map((p) => p.promise)).then((results) => {
-      _loadingCount -= pending.length
-      if (signal.aborted) { loadingData = _loadingCount > 0; return }
-      for (let i = 0; i < results.length; i++) {
-        const r = results[i]
-        if (r.status === 'fulfilled') pairScms.set(pending[i].key, r.value)
+    // Capture reactive dependencies: viewport + canvas width for region computation.
+    void globalViewport
+    void viewportOverrides.size // track per-genome overrides
+    const cw = canvasWidth
+    const genomes = genomesInOrder
+    const signal = scmsAbort.signal
+
+    // Debounce: re-fetch 200ms after the last viewport/order change.
+    scmsDebounceTimer = setTimeout(() => {
+      if (signal.aborted) return
+      // Clear stale cache — regions have changed.
+      pairScms.clear()
+      const pending: { key: string; promise: Promise<SCMsResponse> }[] = []
+      for (let i = 0; i < genomes.length - 1; i++) {
+        const g1 = genomes[i]
+        const g2 = genomes[i + 1]
+        const key = pairKey(g1.id, g2.id, ref)
+        const region_g1 = visibleRegionString(g1, effectiveViewport(g1.id), cw)
+        const region_g2 = visibleRegionString(g2, effectiveViewport(g2.id), cw)
+        pending.push({
+          key,
+          promise: api.scms(g1.id, g2.id, { reference: ref, region_g1, region_g2 }, signal),
+        })
       }
-      dataVersion++
-      loadingData = _loadingCount > 0
-    })
+      if (pending.length === 0) return
+      _loadingCount += pending.length
+      loadingData = true
+      void Promise.allSettled(pending.map((p) => p.promise)).then((results) => {
+        _loadingCount -= pending.length
+        if (signal.aborted) { loadingData = _loadingCount > 0; return }
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i]
+          if (r.status === 'fulfilled') pairScms.set(pending[i].key, r.value)
+        }
+        dataVersion++
+        loadingData = _loadingCount > 0
+      })
+    }, 200)
+
+    return () => clearTimeout(scmsDebounceTimer)
   })
 
   $effect(() => {
@@ -390,17 +433,17 @@
   })
 
   $effect(() => {
-    if (!trackCanvas || !allGenomes || canvasWidth < 2 || canvasHeight < 2) return
+    if (!trackCanvas || !allGenomes || canvasWidth < 2 || effectiveCanvasHeight < 2) return
     void viewportOverrides.size
     void globalViewport
-    const ctx = sizeAndContext(trackCanvas, canvasWidth, canvasHeight)
+    const ctx = sizeAndContext(trackCanvas, canvasWidth, effectiveCanvasHeight)
     if (!ctx) return
     drawTracks(
       ctx,
       genomesInOrder,
       viewportFn,
       canvasWidth,
-      canvasHeight,
+      effectiveCanvasHeight,
       paintByGenome,
       refColorMap,
       fadeMultiplier,
@@ -408,10 +451,10 @@
   })
 
   $effect(() => {
-    if (!ribbonCanvas || canvasWidth < 2 || canvasHeight < 2) return
+    if (!ribbonCanvas || canvasWidth < 2 || effectiveCanvasHeight < 2) return
     void viewportOverrides.size
     void globalViewport
-    const ctx = sizeAndContext(ribbonCanvas, canvasWidth, canvasHeight)
+    const ctx = sizeAndContext(ribbonCanvas, canvasWidth, effectiveCanvasHeight)
     if (!ctx) return
     if (lodModeValue === 'scm') {
       drawScmLines(
@@ -419,7 +462,7 @@
         adjacentPairsScms,
         viewportFn,
         canvasWidth,
-        canvasHeight,
+        effectiveCanvasHeight,
         refColorMap,
         fadeMultiplier,
       )
@@ -429,7 +472,7 @@
         adjacentPairs,
         viewportFn,
         canvasWidth,
-        canvasHeight,
+        effectiveCanvasHeight,
         refColorMap,
         fadeMultiplier,
       )
@@ -437,21 +480,21 @@
   })
 
   $effect(() => {
-    if (!overlayCanvas || canvasWidth < 2 || canvasHeight < 2) return
+    if (!overlayCanvas || canvasWidth < 2 || effectiveCanvasHeight < 2) return
     void viewportOverrides.size
     void globalViewport
-    const ctx = sizeAndContext(overlayCanvas, canvasWidth, canvasHeight)
+    const ctx = sizeAndContext(overlayCanvas, canvasWidth, effectiveCanvasHeight)
     if (!ctx) return
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight)
+    ctx.clearRect(0, 0, canvasWidth, effectiveCanvasHeight)
     // FISH ticks first (underneath highlight).
-    drawFishSets(ctx, fishSets, fishVisible, genomesInOrder, viewportFn, canvasWidth, canvasHeight)
+    drawFishSets(ctx, fishSets, fishVisible, genomesInOrder, viewportFn, canvasWidth, effectiveCanvasHeight)
     // Transient highlight on top.
     const overlay: HighlightOverlay = {
       source: highlightSelection,
       isSelecting: highlightDragging,
       result: highlightResult,
     }
-    drawHighlight(ctx, overlay, genomesInOrder, viewportFn, canvasWidth, canvasHeight)
+    drawHighlight(ctx, overlay, genomesInOrder, viewportFn, canvasWidth, effectiveCanvasHeight)
   })
 
   // ----------------------------- Visibility (sidebar) --------------------
@@ -592,7 +635,7 @@
       e.preventDefault()
       ;(e.target as Element).setPointerCapture(e.pointerId)
       highlightSelection = {
-        genomeIdx: click.genomeIdx,
+        genomeId: click.genome.id,
         genome: click.genome,
         seq: click.seq,
         startBp: click.bpLocal,
@@ -1031,6 +1074,10 @@
       ? totalTrackedHeight(genomesInOrder.length, DEFAULT_LAYOUT)
       : 0,
   )
+  // Canvas layers must be sized to the full content height so that all
+  // genomes render correctly even when the track stack is taller than the
+  // scroll container.
+  let effectiveCanvasHeight = $derived(Math.max(canvasHeight, canvasContentHeight))
 
   const HANDLE_HEIGHT = 18 // DOM overlay strip sitting above each bar
 </script>

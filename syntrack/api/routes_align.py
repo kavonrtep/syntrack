@@ -120,6 +120,9 @@ def align(
     source_seq_idx = source_seq_names.index(seq)
 
     target_ids = targets if targets is not None else list(state.scm_store.genome_ids)
+    for tid in target_ids:
+        if tid not in state.genome_store:
+            raise HTTPException(404, f"unknown target genome: {tid!r}")
     block_params = state.pair_cache.block_params
     mappings: list[AlignmentMappingSchema] = []
     for target_id in target_ids:

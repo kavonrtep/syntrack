@@ -92,6 +92,36 @@ export function zoomAtFraction(
   }
 }
 
+/**
+ * Find the sequence covering the viewport center and return a "seq:start-end"
+ * region string suitable for the /synteny/scms region_g1 / region_g2 params.
+ * Returns undefined if the genome has no sequences or the viewport spans
+ * beyond any single sequence boundary.
+ */
+export function visibleRegionString(
+  genome: { total_length: number; sequences: { name: string; length: number; offset: number }[] },
+  viewport: Viewport,
+  canvasWidth: number,
+): string | undefined {
+  const { startBp, endBp } = visibleRange(viewport, genome.total_length, canvasWidth)
+  if (genome.sequences.length === 0) return undefined
+  // Find the sequence containing the center of the visible range.
+  const center = (startBp + endBp) / 2
+  let seq: { name: string; length: number; offset: number } | undefined
+  for (const s of genome.sequences) {
+    if (center >= s.offset && center < s.offset + s.length) {
+      seq = s
+      break
+    }
+  }
+  if (!seq) return undefined
+  // Clamp the visible range to this sequence's bounds and convert to local coords.
+  const localStart = Math.max(0, Math.floor(startBp - seq.offset))
+  const localEnd = Math.min(seq.length, Math.ceil(endBp - seq.offset))
+  if (localEnd <= localStart) return undefined
+  return `${seq.name}:${localStart}-${localEnd}`
+}
+
 /** Pan by a fraction of the visible window (e.g., dragging by 30 px on a 600px canvas → -0.05). */
 export function panByFraction(viewport: Viewport, deltaFraction: number): Viewport {
   // delta is in canvas-fraction; convert to total-fraction = delta / zoom

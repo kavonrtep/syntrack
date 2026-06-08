@@ -36,6 +36,11 @@ def get_highlight(
     region: str = Query(
         ..., description="Region on the source genome as 'seq:start-end' (0-based half-open)."
     ),
+    limit: int = Query(
+        500,
+        ge=0,
+        description="Max positions per target genome. 0 = unlimited.",
+    ),
     state: AppState = Depends(get_state),
 ) -> HighlightResponse:
     if genome_id not in state.genome_store:
@@ -77,6 +82,9 @@ def get_highlight(
             targets.append(HighlightTargetSchema(genome_id=target_id, scm_count=0, positions=[]))
             continue
         target_genome = state.genome_store[target_id]
+        total_count = int(matching.size)
+        truncated = limit > 0 and total_count > limit
+        to_emit = matching[:limit] if truncated else matching
         positions = [
             HighlightPositionSchema(
                 scm_id=universe[int(row["scm_id_idx"])],
@@ -85,11 +93,14 @@ def get_highlight(
                 end=int(row["end"]),
                 strand=_strand_str(int(row["strand"])),
             )
-            for row in matching
+            for row in to_emit
         ]
         targets.append(
             HighlightTargetSchema(
-                genome_id=target_id, scm_count=len(positions), positions=positions
+                genome_id=target_id,
+                scm_count=total_count,
+                positions=positions,
+                truncated=truncated,
             )
         )
 

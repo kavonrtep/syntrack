@@ -80,6 +80,22 @@ def test_align_unknown_seq_404(client: TestClient) -> None:
     assert r.status_code == 404
 
 
+def test_align_unknown_target_404(client: TestClient) -> None:
+    r = client.get(
+        "/api/align",
+        params={"genome_id": "A", "seq": "chr1", "pos": 100, "targets": ["NOPE"]},
+    )
+    assert r.status_code == 404
+
+
+def test_align_unknown_target_in_list_404(client: TestClient) -> None:
+    r = client.get(
+        "/api/align",
+        params={"genome_id": "A", "seq": "chr1", "pos": 100, "targets": ["B", "NOPE"]},
+    )
+    assert r.status_code == 404
+
+
 def test_align_bp_to_pixel_roundtrip(client: TestClient) -> None:
     """For a bp inside a block, mapping then inverse-mapping (click at the
     same pixel on target) should land at the same target bp. Verified by

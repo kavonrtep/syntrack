@@ -87,8 +87,16 @@ def app_state(tmp_path: Path) -> AppState:
         block_detection=BlockDetection(min_block_size=2),  # smaller for synthetic data
         palette=palette,
     )
-    cache = PairCache(scm, BlockParams(min_block_size=2), max_pairs=30)
-    return AppState(config=cfg, genome_store=gs, scm_store=scm, pair_cache=cache)
+    block_params = BlockParams(min_block_size=2)
+    cache = PairCache(scm, block_params, max_pairs=30)
+    paint_cache = PairCache(scm, block_params, max_pairs=20)
+    return AppState(
+        config=cfg,
+        genome_store=gs,
+        scm_store=scm,
+        pair_cache=cache,
+        paint_cache=paint_cache,
+    )
 
 
 @pytest.fixture

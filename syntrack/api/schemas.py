@@ -153,6 +153,7 @@ class HighlightTargetSchema(_Schema):
     genome_id: str
     scm_count: int
     positions: list[HighlightPositionSchema]
+    truncated: bool = False
 
 
 class HighlightResponse(_Schema):
@@ -253,6 +254,7 @@ class FishGenomeCoverage(_Schema):
     genome_id: str
     scm_count: int
     positions: list[FishPositionSchema]
+    truncated: bool = False
 
 
 class FishSetRequest(_Schema):

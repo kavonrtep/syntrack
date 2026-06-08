@@ -21,4 +21,5 @@ class AppState:
     genome_store: GenomeStore
     scm_store: SCMStore
     pair_cache: PairCache
+    paint_cache: PairCache
     fish_sets: dict[str, FishSetResponse] = field(default_factory=dict)

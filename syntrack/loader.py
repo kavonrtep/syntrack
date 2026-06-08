@@ -36,14 +36,21 @@ def load_app_state(config_path: Path) -> AppState:
     manifest = read_manifest(cfg.data.genomes_csv)
     genome_store = GenomeStore.load(manifest, cfg.palette, cfg.genome_labels)
     scm_store = SCMStore.load(manifest, _to_filter_params(cfg), genome_store)
+    block_params = _to_block_params(cfg)
     pair_cache = PairCache(
         scm_store,
-        _to_block_params(cfg),
+        block_params,
         max_pairs=cfg.pair_cache.max_pairs,
+    )
+    paint_cache = PairCache(
+        scm_store,
+        block_params,
+        max_pairs=cfg.pair_cache.paint_max_pairs,
     )
     return AppState(
         config=cfg,
         genome_store=genome_store,
         scm_store=scm_store,
         pair_cache=pair_cache,
+        paint_cache=paint_cache,
     )

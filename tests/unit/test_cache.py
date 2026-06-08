@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -172,6 +176,34 @@ def test_clear_empties_cache(four_genome_store: SCMStore) -> None:
     cache.get_or_derive("C", "D")
     cache.clear()
     assert len(cache) == 0
+
+
+def test_concurrent_derive_single_flight(four_genome_store: SCMStore) -> None:
+    """Concurrent requests for the same key share a single derivation."""
+    cache = PairCache(four_genome_store, BlockParams(), max_pairs=10)
+    derive_count = 0
+    original_derive = __import__("syntrack.derive.pair", fromlist=["derive_pair"]).derive_pair
+    call_lock = threading.Lock()
+
+    def slow_derive(scm: object, g1: str, g2: str) -> object:
+        nonlocal derive_count
+        time.sleep(0.1)  # hold the per-key lock so other threads queue up
+        result = original_derive(scm, g1, g2)
+        with call_lock:
+            derive_count += 1
+        return result
+
+    with (
+        patch("syntrack.cache.derive_pair", side_effect=slow_derive),
+        ThreadPoolExecutor(max_workers=4) as pool,
+    ):
+        futures = [pool.submit(cache.get_or_derive, "A", "B") for _ in range(4)]
+        results = [f.result() for f in futures]
+
+    # Single-flight: only 1 derivation, all threads get the same entry.
+    assert derive_count == 1
+    assert all(r is results[0] for r in results)
+    assert len(cache) == 1
 
 
 def test_iter_returns_keys_in_lru_order(four_genome_store: SCMStore) -> None:
