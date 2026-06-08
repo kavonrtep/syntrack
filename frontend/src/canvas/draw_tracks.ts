@@ -62,6 +62,7 @@ export function drawTracks(
   canvasHeight: number,
   paintByGenome: GenomePaintMap,
   referenceColorMap: Map<string, string>,
+  referenceGenomeId: string | null,
   fadeMultiplier = 1,
   layout: TrackLayout = DEFAULT_LAYOUT,
 ): void {
@@ -94,9 +95,16 @@ export function drawTracks(
     // doubles as the drag-to-reorder control. Nothing to draw on the canvas.)
 
     const painting = paintByGenome.get(g.id)
+    const isReference = g.id === referenceGenomeId
     const extents: SeqExtent[] = []
 
     // Base pass: for each visible sequence, fill its full on-screen extent.
+    // The base fill follows the reference-propagation colour model, never the
+    // backend per-genome palette (`seq.color`). The reference genome's own bar
+    // reads each sequence's chosen/default colour from referenceColorMap; every
+    // other genome starts grey (UNKNOWN_COLOR) and is filled in by painted
+    // regions as they arrive. This keeps the "default = all grey" intent intact
+    // and avoids a colourful flash from seq.color while paint data is loading.
     for (const seq of g.sequences) {
       const seqStart = seq.offset
       const seqEnd = seq.offset + seq.length
@@ -104,7 +112,9 @@ export function drawTracks(
       const x0 = Math.max(0, bpToPx(seqStart, vp, g.total_length, canvasWidth))
       const x1 = Math.min(canvasWidth, bpToPx(seqEnd, vp, g.total_length, canvasWidth))
       const w = Math.max(1, x1 - x0)
-      const baseColor = painting ? UNKNOWN_COLOR : seq.color
+      const baseColor = isReference
+        ? (referenceColorMap.get(seq.name) ?? UNKNOWN_COLOR)
+        : UNKNOWN_COLOR
       addRect(baseColor, x0, y, w, layout.trackHeight)
       extents.push({ name: seq.name, x0, x1, y })
     }

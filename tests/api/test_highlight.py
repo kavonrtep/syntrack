@@ -107,3 +107,36 @@ def test_highlight_malformed_region_400(client: TestClient) -> None:
         params={"genome_id": "A", "region": "garbage"},
     )
     assert r.status_code == 400
+
+
+def test_highlight_truncation_subsamples_uniformly(client: TestClient) -> None:
+    """When the per-genome cap is hit, the emitted positions must be sampled
+    uniformly across the region, not head-truncated.
+
+    Regression for the perf-cap bug: ``matching[:limit]`` returned the lowest-
+    offset matches only, clustering every tick at the start of the chromosome
+    and collapsing the cross-genome signal. Uniform sampling keeps the full span.
+
+    A.chr1:[0, 2000) catches OG01..OG10 (10 source SCMs). Target B shares
+    OG01..OG08 at increasing positions. With limit=3, a uniform sample must
+    include the *last* match (OG08); head truncation would drop it.
+    """
+    body = client.get(
+        "/api/highlight",
+        params={"genome_id": "A", "region": "chr1:0-2000", "limit": 3},
+    ).json()
+
+    src = body["source"]
+    assert src["scm_count"] == 10  # full total, independent of the cap
+    assert src["truncated"] is True
+    assert len(src["scm_ids"]) <= 3
+    # Uniform sample spans the source: highest-numbered source SCM is retained.
+    assert "OG10" in src["scm_ids"]
+
+    b = _target(body, "B")
+    assert b["scm_count"] == 8  # full match count, not the truncated length
+    assert b["truncated"] is True
+    assert len(b["positions"]) <= 3
+    emitted = {p["scm_id"] for p in b["positions"]}
+    # The defining property: the last (highest-offset) match survives.
+    assert "OG08" in emitted

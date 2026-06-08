@@ -455,6 +455,7 @@
       effectiveCanvasHeight,
       paintByGenome,
       refColorMap,
+      referenceGenome?.id ?? null,
       fadeMultiplier,
     )
   })
