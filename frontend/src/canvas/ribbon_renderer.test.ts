@@ -14,16 +14,23 @@ const VIEW: RibbonView = {
 }
 
 describe('RibbonRenderer (main-thread fallback)', () => {
-  it('falls back to main thread when OffscreenCanvas transfer is unavailable', () => {
-    // happy-dom has no transferControlToOffscreen, so this path is exercised.
+  it('renders on the main thread when the worker is not requested', () => {
     const canvas = document.createElement('canvas')
     canvas.getContext = (() => null) as unknown as HTMLCanvasElement['getContext']
-    const r = new RibbonRenderer(canvas)
+    const r = new RibbonRenderer(canvas, false)
     expect(r.offscreen).toBe(false)
-    // No worker: data/render with a null context must be safe no-ops.
+    // Null context must be a safe no-op, never a throw into the caller.
     expect(() => r.setData(EMPTY_DATA)).not.toThrow()
     expect(() => r.render(VIEW)).not.toThrow()
     expect(() => r.dispose()).not.toThrow()
+  })
+
+  it('does not attempt a worker even if opted-in when OffscreenCanvas is unavailable', () => {
+    // happy-dom has no transferControlToOffscreen, so opt-in still falls back.
+    const canvas = document.createElement('canvas')
+    canvas.getContext = (() => null) as unknown as HTMLCanvasElement['getContext']
+    const r = new RibbonRenderer(canvas, true)
+    expect(r.offscreen).toBe(false)
   })
 
   it('draws to the 2D context once both data and a view have arrived', () => {
@@ -39,7 +46,7 @@ describe('RibbonRenderer (main-thread fallback)', () => {
     }
     const canvas = document.createElement('canvas')
     canvas.getContext = (() => ctxMock) as unknown as HTMLCanvasElement['getContext']
-    const r = new RibbonRenderer(canvas)
+    const r = new RibbonRenderer(canvas, false)
 
     // Only a view, no data yet → nothing drawn.
     r.render(VIEW)
@@ -48,5 +55,20 @@ describe('RibbonRenderer (main-thread fallback)', () => {
     // Data arrives → renderer repaints with the cached view.
     r.setData(EMPTY_DATA)
     expect(clearRect).toHaveBeenCalled()
+  })
+
+  it('never throws into the caller when drawing fails', () => {
+    // A context whose methods throw must be swallowed, not propagated.
+    const canvas = document.createElement('canvas')
+    canvas.getContext = (() =>
+      ({
+        clearRect: () => {
+          throw new Error('boom')
+        },
+        setTransform: () => {},
+      }) as unknown) as HTMLCanvasElement['getContext']
+    const r = new RibbonRenderer(canvas, false)
+    r.setData(EMPTY_DATA)
+    expect(() => r.render(VIEW)).not.toThrow()
   })
 })

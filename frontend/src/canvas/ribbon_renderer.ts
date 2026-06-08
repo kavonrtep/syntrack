@@ -1,10 +1,16 @@
 // Main-thread handle for the connection (ribbon/SCM) layer.
 //
-// When OffscreenCanvas + Worker are available it transfers the canvas to a
-// worker and forwards data/view messages; otherwise it draws on the main
-// thread with the exact same code path (drawRibbons / drawScmLines). Callers
-// don't care which: they push data via setData() and frames via render(); the
-// renderer keeps the last of each and repaints when either changes.
+// By default it draws on the main thread (the proven path). When explicitly
+// enabled (and supported) it transfers the canvas to a worker and forwards
+// data/view messages instead. Either way callers push data via setData() and
+// frames via render(); the handle keeps the last of each and repaints when
+// either changes.
+//
+// Robustness: every public call is wrapped so a worker/clone/context failure
+// can never throw into a Svelte effect (which would crash the component and
+// freeze the UI). The worker is created BEFORE the one-shot
+// transferControlToOffscreen so a synchronous Worker-construction failure
+// leaves the canvas intact for the main-thread fallback.
 
 import { DEFAULT_VIEWPORT } from './coords'
 import { drawRibbons } from './draw_ribbons'
@@ -27,21 +33,29 @@ export class RibbonRenderer {
   private readonly canvas: HTMLCanvasElement
   private data: RibbonData | null = null
   private view: RibbonView | null = null
+  /** Set if a worker error makes the (already-transferred) canvas unusable. */
+  private dead = false
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, useWorker: boolean) {
     this.canvas = canvas
     let ok = false
-    if (supportsOffscreen()) {
+    if (useWorker && supportsOffscreen()) {
       try {
-        const offscreen = canvas.transferControlToOffscreen()
-        this.worker = new Worker(new URL('./ribbon_worker.ts', import.meta.url), {
+        // Construct the worker first; only commit the one-shot canvas transfer
+        // once it exists, so a synchronous failure here keeps the canvas usable.
+        const worker = new Worker(new URL('./ribbon_worker.ts', import.meta.url), {
           type: 'module',
         })
-        this.worker.postMessage({ type: 'init', canvas: offscreen }, [offscreen])
+        worker.onerror = () => {
+          // The module failed to load/run after we already transferred the
+          // canvas — we can't get a 2D context back, so just stop drawing.
+          this.dead = true
+        }
+        const offscreen = canvas.transferControlToOffscreen()
+        worker.postMessage({ type: 'init', canvas: offscreen }, [offscreen])
+        this.worker = worker
         ok = true
       } catch {
-        // transferControlToOffscreen can throw (already transferred, or the
-        // browser lacks worker module support); fall back to main-thread draw.
         this.worker?.terminate()
         this.worker = null
         ok = false
@@ -52,19 +66,38 @@ export class RibbonRenderer {
 
   setData(data: RibbonData): void {
     this.data = data
-    if (this.worker) this.worker.postMessage({ type: 'data', data })
-    else this.drawMain()
+    this.flush('data')
   }
 
   render(view: RibbonView): void {
     this.view = view
-    if (this.worker) this.worker.postMessage({ type: 'render', view })
-    else this.drawMain()
+    this.flush('render')
   }
 
   dispose(): void {
-    this.worker?.terminate()
+    try {
+      this.worker?.terminate()
+    } catch {
+      /* ignore */
+    }
     this.worker = null
+  }
+
+  private flush(kind: 'data' | 'render'): void {
+    if (this.dead) return
+    try {
+      if (this.worker) {
+        if (kind === 'data' && this.data) this.worker.postMessage({ type: 'data', data: this.data })
+        else if (kind === 'render' && this.view)
+          this.worker.postMessage({ type: 'render', view: this.view })
+      } else {
+        this.drawMain()
+      }
+    } catch {
+      // A postMessage clone error or a draw failure must never propagate into
+      // the effect that called us; degrade to "no ribbon" instead of a crash.
+      this.dead = !!this.worker
+    }
   }
 
   // ---- main-thread fallback (no worker) ----

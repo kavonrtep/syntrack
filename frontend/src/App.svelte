@@ -465,11 +465,17 @@
     )
   })
 
-  // Create the ribbon renderer once the canvas is mounted (transfers the
-  // canvas to a worker if supported). Disposed on teardown.
+  // OffscreenCanvas worker for the connection layer is opt-in pending browser
+  // verification (enable with ?ribbonWorker=1). Default is main-thread render,
+  // which is the proven path.
+  const useRibbonWorker =
+    typeof location !== 'undefined' &&
+    new URLSearchParams(location.search).get('ribbonWorker') === '1'
+
+  // Create the ribbon renderer once the canvas is mounted. Disposed on teardown.
   $effect(() => {
     if (!ribbonCanvas) return
-    const r = new RibbonRenderer(ribbonCanvas)
+    const r = new RibbonRenderer(ribbonCanvas, useRibbonWorker)
     ribbonRenderer = r
     return () => {
       r.dispose()
@@ -478,28 +484,28 @@
   })
 
   // Data effect: forward synteny data to the renderer when it (re)fetches.
-  // Genome objects come from reactive $state, so snapshot them to plain values
-  // before they cross the worker boundary; the (already-plain) blocks/scms
-  // arrays are passed by reference and cloned once by postMessage.
+  // Only when rendering off-thread do we snapshot genome $state proxies to
+  // plain clonable values; the main-thread path uses the data directly, exactly
+  // as before (no snapshot, no structured clone).
   $effect(() => {
     const r = ribbonRenderer
     if (!r) return
-    const plainGenomes = new Map(
-      genomesInOrder.map((g) => [g.id, $state.snapshot(g) as Genome]),
-    )
-    const data: RibbonData = {
-      pairs: adjacentPairs.map((p) => ({
+    let pairs = adjacentPairs
+    let pairsScms = adjacentPairsScms
+    if (r.offscreen) {
+      const plain = new Map(genomesInOrder.map((g) => [g.id, $state.snapshot(g) as Genome]))
+      pairs = adjacentPairs.map((p) => ({
         ...p,
-        g1: plainGenomes.get(p.g1.id) ?? p.g1,
-        g2: plainGenomes.get(p.g2.id) ?? p.g2,
-      })),
-      pairsScms: adjacentPairsScms.map((p) => ({
+        g1: plain.get(p.g1.id) ?? p.g1,
+        g2: plain.get(p.g2.id) ?? p.g2,
+      }))
+      pairsScms = adjacentPairsScms.map((p) => ({
         ...p,
-        g1: plainGenomes.get(p.g1.id) ?? p.g1,
-        g2: plainGenomes.get(p.g2.id) ?? p.g2,
-      })),
-      colorMap: Array.from(refColorMap),
+        g1: plain.get(p.g1.id) ?? p.g1,
+        g2: plain.get(p.g2.id) ?? p.g2,
+      }))
     }
+    const data: RibbonData = { pairs, pairsScms, colorMap: Array.from(refColorMap) }
     r.setData(data)
   })
 
