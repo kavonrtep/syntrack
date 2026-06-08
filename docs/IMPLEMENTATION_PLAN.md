@@ -82,7 +82,8 @@ Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs)
 - **User-controlled chromosome coloring**: all chromosomes start grey; clicking a chromosome on the reference genome opens the native color picker; chosen colors propagate to all tracks, ribbons, and SCM lines. "Reset colors" button reverts to grey.
 - Input data update instructions added to `deploy/README.md`.
 
-### v0.2.3 ✅ (performance — 11-genome dataset)
+### v0.2.4 ✅ (performance — 11-genome dataset)
+- **Batched API response flush**: replaced reactive SvelteMaps for data caches with plain Maps + a single `dataVersion` counter. Fetch effects use `Promise.allSettled` to collect all responses, flush them in one synchronous block, and trigger exactly one redraw instead of N cascading redraws. Fixes browser D-state freeze with 10.8 MB / 61K blocks.
 - **rAF-throttled wheel zoom**: batch wheel events through `requestAnimationFrame` to cap redraws at 60 FPS (was 100+ Hz unthrottled).
 - **AbortController on API effects**: rapid reference/order changes cancel in-flight requests instead of doubling network traffic.
 - **Paint region merging**: server-side merge of adjacent same-color paint regions reduces payload by ~30–50%.
