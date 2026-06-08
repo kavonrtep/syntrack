@@ -137,6 +137,7 @@ export type HighlightTarget = {
   genome_id: string
   scm_count: number
   positions: HighlightPosition[]
+  truncated: boolean
 }
 
 export type HighlightResponse = {
@@ -147,6 +148,7 @@ export type HighlightResponse = {
     end: number
     scm_count: number
     scm_ids: string[]
+    truncated: boolean
   }
   targets: HighlightTarget[]
 }
@@ -165,6 +167,7 @@ export type FishGenomeCoverage = {
   genome_id: string
   scm_count: number
   positions: FishPosition[]
+  truncated: boolean
 }
 
 export type FishSetSummary = {

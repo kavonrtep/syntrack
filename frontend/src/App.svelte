@@ -284,6 +284,15 @@
     return out
   })
 
+  /** Find the most recently cached SCM entry for a pair+ref, regardless of region. */
+  function findScmsEntry(g1id: string, g2id: string, ref: string): SCMsResponse | undefined {
+    const prefix = `${g1id}|${g2id}|${ref}|`
+    for (const [k, v] of pairScms) {
+      if (k.startsWith(prefix)) return v
+    }
+    return undefined
+  }
+
   let adjacentPairsScms = $derived.by<AdjacentPairScms[]>(() => {
     void dataVersion // recompute when batch arrives
     const out: AdjacentPairScms[] = []
@@ -291,7 +300,7 @@
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
       const g1 = genomesInOrder[i]
       const g2 = genomesInOrder[i + 1]
-      const cached = pairScms.get(pairKey(g1.id, g2.id, ref))
+      const cached = findScmsEntry(g1.id, g2.id, ref)
       out.push({
         topIndex: i,
         bottomIndex: i + 1,
@@ -361,15 +370,15 @@
     // Debounce: re-fetch 200ms after the last viewport/order change.
     scmsDebounceTimer = setTimeout(() => {
       if (signal.aborted) return
-      // Clear stale cache — regions have changed.
-      pairScms.clear()
       const pending: { key: string; promise: Promise<SCMsResponse> }[] = []
       for (let i = 0; i < genomes.length - 1; i++) {
         const g1 = genomes[i]
         const g2 = genomes[i + 1]
-        const key = pairKey(g1.id, g2.id, ref)
         const region_g1 = visibleRegionString(g1, effectiveViewport(g1.id), cw)
         const region_g2 = visibleRegionString(g2, effectiveViewport(g2.id), cw)
+        // Region-keyed: different viewport positions produce distinct cache entries.
+        const key = `${g1.id}|${g2.id}|${ref}|${region_g1 ?? '*'}|${region_g2 ?? '*'}`
+        if (pairScms.has(key)) continue
         pending.push({
           key,
           promise: api.scms(g1.id, g2.id, { reference: ref, region_g1, region_g2 }, signal),
@@ -1064,7 +1073,9 @@
     if (highlightResult) {
       const src = highlightResult.source
       const totalMatches = highlightResult.targets.reduce((s, t) => s + t.scm_count, 0)
-      line += `  ·  highlight ${src.seq}:${src.start.toLocaleString()}-${src.end.toLocaleString()} — ${src.scm_count} source SCMs, ${totalMatches} cross-genome (Esc to clear)`
+      const anyTruncated = highlightResult.targets.some((t) => t.truncated)
+      const truncNote = anyTruncated ? ' [ticks capped]' : ''
+      line += `  ·  highlight ${src.seq}:${src.start.toLocaleString()}-${src.end.toLocaleString()} — ${src.scm_count} source SCMs, ${totalMatches} cross-genome${truncNote} (Esc to clear)`
     }
     return line
   })

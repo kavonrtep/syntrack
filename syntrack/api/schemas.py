@@ -137,8 +137,9 @@ class HighlightSourceSchema(_Schema):
     end: int
     scm_count: int
     scm_ids: list[str]
-    """SCM IDs in the source region (in store order). Included so the
-    frontend can export them directly without a second round-trip."""
+    """SCM IDs in the source region (in store order), capped by the limit param.
+    Use ``/api/scm`` or a future export endpoint for the full list."""
+    truncated: bool = False
 
 
 class HighlightPositionSchema(_Schema):

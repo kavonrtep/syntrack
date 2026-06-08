@@ -57,14 +57,18 @@ def get_highlight(
     scm_idxs = hits["scm_id_idx"]
 
     universe = state.scm_store.universe
-    source_scm_ids = [universe[int(i)] for i in scm_idxs]
+    source_total = int(scm_idxs.size)
+    source_truncated = limit > 0 and source_total > limit
+    source_ids_to_emit = scm_idxs[:limit] if source_truncated else scm_idxs
+    source_scm_ids = [universe[int(i)] for i in source_ids_to_emit]
     source_schema = HighlightSourceSchema(
         genome_id=genome_id,
         seq=seq,
         start=start,
         end=end,
-        scm_count=int(scm_idxs.size),
+        scm_count=source_total,
         scm_ids=source_scm_ids,
+        truncated=source_truncated,
     )
 
     targets: list[HighlightTargetSchema] = []

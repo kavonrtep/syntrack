@@ -37,7 +37,7 @@ class PairCache:
     underlying data with swapped roles needs a separate derivation).
     """
 
-    __slots__ = ("_block_params", "_cache", "_cap", "_key_locks", "_meta_lock", "_scm")
+    __slots__ = ("_block_params", "_cache", "_cap", "_derive_locks", "_lock", "_scm")
 
     def __init__(
         self,
@@ -51,27 +51,33 @@ class PairCache:
         self._cap = max_pairs
         self._block_params = block_params
         self._cache: OrderedDict[tuple[str, str], CacheEntry] = OrderedDict()
-        self._meta_lock = threading.Lock()
-        self._key_locks: dict[tuple[str, str], threading.Lock] = {}
+        # Global lock protects _cache, _block_params, and _derive_locks.
+        self._lock = threading.RLock()
+        # Per-key locks for single-flight derivation (managed under _lock).
+        self._derive_locks: dict[tuple[str, str], threading.Lock] = {}
 
     # ------------------------------ Properties ------------------------------
 
     @property
     def block_params(self) -> BlockParams:
-        return self._block_params
+        with self._lock:
+            return self._block_params
 
     @property
     def capacity(self) -> int:
         return self._cap
 
     def __len__(self) -> int:
-        return len(self._cache)
+        with self._lock:
+            return len(self._cache)
 
     def __contains__(self, key: tuple[str, str]) -> bool:
-        return key in self._cache
+        with self._lock:
+            return key in self._cache
 
     def __iter__(self) -> Iterator[tuple[str, str]]:
-        return iter(self._cache)
+        with self._lock:
+            return iter(list(self._cache))
 
     # ------------------------------ Access ----------------------------------
 
@@ -79,27 +85,40 @@ class PairCache:
         """Return the cached entry for ``(g1_id, g2_id)``, deriving on miss.
 
         Thread-safe: concurrent requests for the same key share a single
-        in-progress derivation via per-key locking (single-flight pattern).
+        in-progress derivation. The expensive derivation runs outside the
+        cache lock; the result is inserted under the lock with a re-check.
         """
         key = (g1_id, g2_id)
-        with self._meta_lock:
-            lock = self._key_locks.setdefault(key, threading.Lock())
-        with lock:
+        with self._lock:
             cached = self._cache.get(key)
             if cached is not None:
                 self._cache.move_to_end(key)
                 return cached
+            derive_lock = self._derive_locks.setdefault(key, threading.Lock())
+
+        # Derivation runs outside _lock so other keys can proceed.
+        with derive_lock:
+            # Re-check under derive_lock: another thread may have finished.
+            with self._lock:
+                cached = self._cache.get(key)
+                if cached is not None:
+                    self._cache.move_to_end(key)
+                    return cached
+                bp = self._block_params
 
             pair = derive_pair(self._scm, g1_id, g2_id)
-            blocks = tuple(detect_blocks(pair, self._block_params))
+            blocks = tuple(detect_blocks(pair, bp))
             entry = CacheEntry(pair=pair, blocks=blocks)
-            self._cache[key] = entry
-            self._evict_if_full()
+
+            with self._lock:
+                self._cache[key] = entry
+                self._evict_if_full()
             return entry
 
     def peek(self, g1_id: str, g2_id: str) -> CacheEntry | None:
         """Return the cached entry without recording an access (no LRU bump, no derive)."""
-        return self._cache.get((g1_id, g2_id))
+        with self._lock:
+            return self._cache.get((g1_id, g2_id))
 
     # ------------------------------ Mutation --------------------------------
 
@@ -109,23 +128,26 @@ class PairCache:
         Returns the number of cached entries whose blocks were recomputed.
         Underlying ``PairwiseSCM`` data is retained — only the block list changes.
         """
-        if new_params == self._block_params:
-            return 0
-        self._block_params = new_params
-        recomputed = 0
-        for key, entry in list(self._cache.items()):
-            self._cache[key] = CacheEntry(
-                pair=entry.pair,
-                blocks=tuple(detect_blocks(entry.pair, new_params)),
-            )
-            recomputed += 1
-        return recomputed
+        with self._lock:
+            if new_params == self._block_params:
+                return 0
+            self._block_params = new_params
+            recomputed = 0
+            for key, entry in list(self._cache.items()):
+                self._cache[key] = CacheEntry(
+                    pair=entry.pair,
+                    blocks=tuple(detect_blocks(entry.pair, new_params)),
+                )
+                recomputed += 1
+            return recomputed
 
     def clear(self) -> None:
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
 
     # ------------------------------ Internals -------------------------------
 
     def _evict_if_full(self) -> None:
+        # Caller must hold _lock.
         while len(self._cache) > self._cap:
             self._cache.popitem(last=False)

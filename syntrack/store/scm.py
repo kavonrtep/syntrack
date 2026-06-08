@@ -360,7 +360,8 @@ def _precompute_shared_counts(
     counts: dict[tuple[str, str], int] = {}
     for i, g1 in enumerate(genome_ids):
         for g2 in genome_ids[i:]:
-            key = (g1, g2)
+            # Normalize key lexicographically to match shared_count() lookup.
+            key = (g1, g2) if g1 <= g2 else (g2, g1)
             if g1 == g2:
                 counts[key] = int(np.count_nonzero(masks[g1]))
             else:

@@ -105,17 +105,19 @@ export function visibleRegionString(
 ): string | undefined {
   const { startBp, endBp } = visibleRange(viewport, genome.total_length, canvasWidth)
   if (genome.sequences.length === 0) return undefined
-  // Find the sequence containing the center of the visible range.
-  const center = (startBp + endBp) / 2
-  let seq: { name: string; length: number; offset: number } | undefined
+  // Find which sequences the visible start and end fall on.
+  let startSeq: { name: string; length: number; offset: number } | undefined
+  let endSeq: { name: string; length: number; offset: number } | undefined
   for (const s of genome.sequences) {
-    if (center >= s.offset && center < s.offset + s.length) {
-      seq = s
-      break
-    }
+    const seqEnd = s.offset + s.length
+    if (!startSeq && startBp < seqEnd) startSeq = s
+    if (endBp > s.offset && endBp <= seqEnd) endSeq = s
   }
-  if (!seq) return undefined
-  // Clamp the visible range to this sequence's bounds and convert to local coords.
+  // If the viewport spans multiple sequences, return undefined to fall back
+  // to an unfiltered fetch — avoids dropping SCMs at sequence boundaries.
+  if (!startSeq || !endSeq || startSeq !== endSeq) return undefined
+  const seq = startSeq
+  // Convert to local coords within the single visible sequence.
   const localStart = Math.max(0, Math.floor(startBp - seq.offset))
   const localEnd = Math.min(seq.length, Math.ceil(endBp - seq.offset))
   if (localEnd <= localStart) return undefined

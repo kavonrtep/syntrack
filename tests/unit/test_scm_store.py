@@ -315,3 +315,33 @@ def test_load_real_pea_dataset(pea_config_path: Path) -> None:
         assert store.scm_count(gid) > 50_000, f"{gid}: too few SCMs"
     # Universe should be in the expected range (200K-1.5M per design §1.4).
     assert 100_000 < store.universe_size < 2_000_000
+
+
+def test_shared_count_independent_of_manifest_order(tmp_path: Path) -> None:
+    """shared_count() must work regardless of genome ID ordering in manifest."""
+    # Manifest order is ["Z", "A"] — reverse of lexicographic.
+    entries = [
+        _make_genome(
+            tmp_path,
+            "Z",
+            [("chr1", 2000)],
+            [
+                _blast_row("OG1", "chr1", 100, 199),
+                _blast_row("OG2", "chr1", 500, 599),
+            ],
+        ),
+        _make_genome(
+            tmp_path,
+            "A",
+            [("chr1", 2000)],
+            [
+                _blast_row("OG2", "chr1", 200, 299),
+                _blast_row("OG3", "chr1", 700, 799),
+            ],
+        ),
+    ]
+    gs = GenomeStore.load(entries, PaletteCfg())
+    store = SCMStore.load(entries, TEST_PARAMS, gs)
+    # Both orderings must return the same count (OG2 is shared).
+    assert store.shared_count("A", "Z") == 1
+    assert store.shared_count("Z", "A") == 1

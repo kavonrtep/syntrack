@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
-
 import numpy as np
+import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
@@ -226,7 +225,7 @@ def get_scms(
             }
         )
 
-    body = json.dumps(
+    body = orjson.dumps(
         {
             "pair": [g1, g2],
             "total_in_region": total_in_region,
