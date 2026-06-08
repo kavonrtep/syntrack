@@ -6,6 +6,7 @@ import type { Genome, PairwiseSCM } from '../api/types'
 import { colorFor } from './colors'
 import { bpToPx, visibleRange } from './coords'
 import {
+  type Ctx2D,
   DEFAULT_LAYOUT,
   type TrackLayout,
   type ViewportFn,
@@ -21,7 +22,7 @@ export type AdjacentPairScms = {
 }
 
 export function drawScmLines(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   pairs: AdjacentPairScms[],
   viewportFn: ViewportFn,
   canvasWidth: number,

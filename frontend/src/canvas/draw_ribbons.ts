@@ -11,6 +11,7 @@ import type { Genome, SyntenyBlock } from '../api/types'
 import { colorFor } from './colors'
 import { bpToPx, visibleRange } from './coords'
 import {
+  type Ctx2D,
   DEFAULT_LAYOUT,
   type TrackLayout,
   type ViewportFn,
@@ -56,7 +57,7 @@ function opacityBucketIndex(scmCount: number, spanBp: number): number {
 }
 
 export function drawRibbons(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   pairs: AdjacentPair[],
   viewportFn: ViewportFn,
   canvasWidth: number,

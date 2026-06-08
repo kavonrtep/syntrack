@@ -39,6 +39,11 @@ export function totalTrackedHeight(nGenomes: number, layout: TrackLayout): numbe
 export type GenomePaintMap = Map<string, PaintRegion[]>
 export type ViewportFn = (genomeId: string) => Viewport
 
+/** A 2D drawing context usable on either a DOM canvas (main thread) or an
+ *  OffscreenCanvas (worker). The ribbon/SCM renderers run in both, so they
+ *  accept the union; only the drawing-surface methods they use are required. */
+export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
+
 // Visible extent of one sequence within one track — carried through from the
 // fill pass to the separator + label passes so we don't recompute.
 type SeqExtent = {

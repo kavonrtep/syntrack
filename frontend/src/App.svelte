@@ -37,8 +37,10 @@
     type HighlightSource,
   } from './canvas/draw_highlight'
   import { drawFishSets } from './canvas/draw_fish'
-  import { drawRibbons, type AdjacentPair } from './canvas/draw_ribbons'
-  import { drawScmLines, type AdjacentPairScms } from './canvas/draw_scms'
+  import type { AdjacentPair } from './canvas/draw_ribbons'
+  import type { AdjacentPairScms } from './canvas/draw_scms'
+  import { RibbonRenderer } from './canvas/ribbon_renderer'
+  import type { RibbonData, RibbonView } from './canvas/ribbon_protocol'
   import { fmtBp } from './canvas/format'
   import { genomeIndexAt } from './canvas/hit_test'
   import { lodMode } from './canvas/lod'
@@ -87,6 +89,9 @@
   let trackCanvas = $state<HTMLCanvasElement | undefined>(undefined)
   let ribbonCanvas = $state<HTMLCanvasElement | undefined>(undefined)
   let overlayCanvas = $state<HTMLCanvasElement | undefined>(undefined)
+  // Connection layer (ribbons / SCM lines) is rendered via this handle, which
+  // offloads to a worker + OffscreenCanvas when supported.
+  let ribbonRenderer = $state<RibbonRenderer | null>(null)
   let canvasWidth = $state(800)
   let canvasHeight = $state(600)
 
@@ -460,33 +465,62 @@
     )
   })
 
+  // Create the ribbon renderer once the canvas is mounted (transfers the
+  // canvas to a worker if supported). Disposed on teardown.
   $effect(() => {
-    if (!ribbonCanvas || canvasWidth < 2 || effectiveCanvasHeight < 2) return
+    if (!ribbonCanvas) return
+    const r = new RibbonRenderer(ribbonCanvas)
+    ribbonRenderer = r
+    return () => {
+      r.dispose()
+      ribbonRenderer = null
+    }
+  })
+
+  // Data effect: forward synteny data to the renderer when it (re)fetches.
+  // Genome objects come from reactive $state, so snapshot them to plain values
+  // before they cross the worker boundary; the (already-plain) blocks/scms
+  // arrays are passed by reference and cloned once by postMessage.
+  $effect(() => {
+    const r = ribbonRenderer
+    if (!r) return
+    const plainGenomes = new Map(
+      genomesInOrder.map((g) => [g.id, $state.snapshot(g) as Genome]),
+    )
+    const data: RibbonData = {
+      pairs: adjacentPairs.map((p) => ({
+        ...p,
+        g1: plainGenomes.get(p.g1.id) ?? p.g1,
+        g2: plainGenomes.get(p.g2.id) ?? p.g2,
+      })),
+      pairsScms: adjacentPairsScms.map((p) => ({
+        ...p,
+        g1: plainGenomes.get(p.g1.id) ?? p.g1,
+        g2: plainGenomes.get(p.g2.id) ?? p.g2,
+      })),
+      colorMap: Array.from(refColorMap),
+    }
+    r.setData(data)
+  })
+
+  // Render effect: push a frame whenever the viewport, size, fade, or LOD
+  // changes. Light payload — heavy data is cached in the renderer/worker.
+  $effect(() => {
+    const r = ribbonRenderer
+    if (!r || canvasWidth < 2 || effectiveCanvasHeight < 2) return
     void viewportOverrides.size
     void globalViewport
-    const ctx = sizeAndContext(ribbonCanvas, canvasWidth, effectiveCanvasHeight)
-    if (!ctx) return
-    if (lodModeValue === 'scm') {
-      drawScmLines(
-        ctx,
-        adjacentPairsScms,
-        viewportFn,
-        canvasWidth,
-        effectiveCanvasHeight,
-        refColorMap,
-        fadeMultiplier,
-      )
-    } else {
-      drawRibbons(
-        ctx,
-        adjacentPairs,
-        viewportFn,
-        canvasWidth,
-        effectiveCanvasHeight,
-        refColorMap,
-        fadeMultiplier,
-      )
+    const viewports: Record<string, Viewport> = {}
+    for (const g of genomesInOrder) viewports[g.id] = effectiveViewport(g.id)
+    const view: RibbonView = {
+      viewports,
+      canvasWidth,
+      canvasHeight: effectiveCanvasHeight,
+      dpr: window.devicePixelRatio || 1,
+      fade: fadeMultiplier,
+      lodMode: lodModeValue,
     }
+    r.render(view)
   })
 
   $effect(() => {
