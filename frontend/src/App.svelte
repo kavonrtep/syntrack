@@ -10,6 +10,7 @@
     Genome,
     HighlightResponse,
     PaintRegion,
+    PaintResponse,
     SCMsResponse,
   } from './api/types'
   import { alignmentDelta } from './canvas/alignment'
@@ -88,12 +89,14 @@
   let canvasWidth = $state(800)
   let canvasHeight = $state(600)
 
-  const pairBlocks = new SvelteMap<string, BlocksResponse>()
-  const loadingBlocks = new SvelteSet<string>()
-  const pairScms = new SvelteMap<string, SCMsResponse>()
-  const loadingScms = new SvelteSet<string>()
-  const paintByPair = new SvelteMap<string, PaintRegion[]>()
-  const loadingPaint = new SvelteSet<string>()
+  // Data caches: plain Maps to avoid per-item reactive overhead. A single
+  // reactive counter bumps once per batch of responses so deriveds/effects
+  // recompute only once instead of N times.
+  const pairBlocks = new Map<string, BlocksResponse>()
+  const pairScms = new Map<string, SCMsResponse>()
+  const paintByPair = new Map<string, PaintRegion[]>()
+  let dataVersion = $state(0)
+  let loadingCount = $state(0)
   function pairKey(g1: string, g2: string, ref: string): string {
     return `${g1}|${g2}|${ref}`
   }
@@ -240,6 +243,7 @@
   })
 
   let adjacentPairs = $derived.by<AdjacentPair[]>(() => {
+    void dataVersion // recompute when batch arrives
     const out: AdjacentPair[] = []
     const ref = referenceGenome?.id ?? ''
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
@@ -258,6 +262,7 @@
   })
 
   let adjacentPairsScms = $derived.by<AdjacentPairScms[]>(() => {
+    void dataVersion // recompute when batch arrives
     const out: AdjacentPairScms[] = []
     const ref = referenceGenome?.id ?? ''
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
@@ -276,6 +281,9 @@
   })
 
   // AbortControllers — cancel in-flight requests when dependencies change.
+  // Responses are collected with Promise.allSettled and flushed into the
+  // plain-Map caches in one synchronous block, bumping `dataVersion` once
+  // so reactive deriveds/effects recompute exactly once per batch.
   let blocksAbort: AbortController | undefined
   let scmsAbort: AbortController | undefined
   let paintAbort: AbortController | undefined
@@ -286,19 +294,25 @@
     const { signal } = blocksAbort
     const ref = referenceGenome?.id
     if (!ref) return
+    const pending: { key: string; promise: Promise<BlocksResponse> }[] = []
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
       const g1 = genomesInOrder[i].id
       const g2 = genomesInOrder[i + 1].id
       const key = pairKey(g1, g2, ref)
-      if (pairBlocks.has(key) || loadingBlocks.has(key)) continue
-      loadingBlocks.add(key)
-      api.blocks(g1, g2, { reference: ref }, signal).then(
-        (resp) => pairBlocks.set(key, resp),
-        (err) => {
-          if (!signal.aborted) error = `Failed to load blocks for ${g1}/${g2}: ${err}`
-        },
-      ).finally(() => loadingBlocks.delete(key))
+      if (pairBlocks.has(key)) continue
+      pending.push({ key, promise: api.blocks(g1, g2, { reference: ref }, signal) })
     }
+    if (pending.length === 0) return
+    loadingCount += pending.length
+    void Promise.allSettled(pending.map((p) => p.promise)).then((results) => {
+      if (signal.aborted) return
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i]
+        if (r.status === 'fulfilled') pairBlocks.set(pending[i].key, r.value)
+      }
+      dataVersion++
+      loadingCount -= pending.length
+    })
   })
 
   $effect(() => {
@@ -308,19 +322,25 @@
     if (lodModeValue !== 'scm') return
     const ref = referenceGenome?.id
     if (!ref) return
+    const pending: { key: string; promise: Promise<SCMsResponse> }[] = []
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
       const g1 = genomesInOrder[i].id
       const g2 = genomesInOrder[i + 1].id
       const key = pairKey(g1, g2, ref)
-      if (pairScms.has(key) || loadingScms.has(key)) continue
-      loadingScms.add(key)
-      api.scms(g1, g2, { reference: ref }, signal).then(
-        (resp) => pairScms.set(key, resp),
-        (err) => {
-          if (!signal.aborted) error = `Failed to load SCMs for ${g1}/${g2}: ${err}`
-        },
-      ).finally(() => loadingScms.delete(key))
+      if (pairScms.has(key)) continue
+      pending.push({ key, promise: api.scms(g1, g2, { reference: ref }, signal) })
     }
+    if (pending.length === 0) return
+    loadingCount += pending.length
+    void Promise.allSettled(pending.map((p) => p.promise)).then((results) => {
+      if (signal.aborted) return
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i]
+        if (r.status === 'fulfilled') pairScms.set(pending[i].key, r.value)
+      }
+      dataVersion++
+      loadingCount -= pending.length
+    })
   })
 
   $effect(() => {
@@ -329,20 +349,27 @@
     const { signal } = paintAbort
     const ref = referenceGenome?.id
     if (!ref) return
+    const pending: { key: string; promise: Promise<PaintResponse> }[] = []
     for (const g of genomesInOrder) {
       const key = paintKey(g.id, ref)
-      if (paintByPair.has(key) || loadingPaint.has(key)) continue
-      loadingPaint.add(key)
-      api.paint(g.id, ref, signal).then(
-        (resp) => paintByPair.set(key, resp.regions),
-        (err) => {
-          if (!signal.aborted) error = `Failed to load painting for ${g.id}: ${err}`
-        },
-      ).finally(() => loadingPaint.delete(key))
+      if (paintByPair.has(key)) continue
+      pending.push({ key, promise: api.paint(g.id, ref, signal) })
     }
+    if (pending.length === 0) return
+    loadingCount += pending.length
+    void Promise.allSettled(pending.map((p) => p.promise)).then((results) => {
+      if (signal.aborted) return
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i]
+        if (r.status === 'fulfilled') paintByPair.set(pending[i].key, r.value.regions)
+      }
+      dataVersion++
+      loadingCount -= pending.length
+    })
   })
 
   let paintByGenome = $derived.by<Map<string, PaintRegion[]>>(() => {
+    void dataVersion // recompute when batch arrives
     const map = new Map<string, PaintRegion[]>()
     const ref = referenceGenome?.id
     if (!ref) return map
@@ -1178,8 +1205,8 @@
           {/each}
         </div>
       </div>
-      {#if loadingBlocks.size + loadingScms.size + loadingPaint.size > 0}
-        {@const total = loadingBlocks.size + loadingScms.size + loadingPaint.size}
+      {#if loadingCount > 0}
+        {@const total = loadingCount}
         <div class="badge">
           loading {total} request{total === 1 ? '' : 's'}…
         </div>
