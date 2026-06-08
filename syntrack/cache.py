@@ -21,6 +21,7 @@ from syntrack.perf import timed
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from syntrack.diskcache import DiskPairStore
     from syntrack.store.scm import SCMStore
 
 
@@ -38,19 +39,23 @@ class PairCache:
     underlying data with swapped roles needs a separate derivation).
     """
 
-    __slots__ = ("_block_params", "_cache", "_cap", "_derive_locks", "_lock", "_scm")
+    __slots__ = ("_block_params", "_cache", "_cap", "_derive_locks", "_disk", "_lock", "_scm")
 
     def __init__(
         self,
         scm_store: SCMStore,
         block_params: BlockParams,
         max_pairs: int = 30,
+        disk_store: DiskPairStore | None = None,
     ) -> None:
         if max_pairs <= 0:
             raise ValueError(f"max_pairs must be positive, got {max_pairs}")
         self._scm = scm_store
         self._cap = max_pairs
         self._block_params = block_params
+        # Optional on-disk backing populated by `syntrack precompute`; consulted
+        # on an in-memory miss before deriving.
+        self._disk = disk_store
         self._cache: OrderedDict[tuple[str, str], CacheEntry] = OrderedDict()
         # Global lock protects _cache, _block_params, and _derive_locks.
         self._lock = threading.RLock()
@@ -107,16 +112,26 @@ class PairCache:
                     return cached
                 bp = self._block_params
 
-            with timed("derive_pair", pair=f"{g1_id}->{g2_id}"):
-                pair = derive_pair(self._scm, g1_id, g2_id)
-            with timed("detect_blocks", pair=f"{g1_id}->{g2_id}", n=pair.n_shared):
-                blocks = tuple(detect_blocks(pair, bp))
-            entry = CacheEntry(pair=pair, blocks=blocks)
+            entry = self._load_or_derive(g1_id, g2_id, bp)
 
             with self._lock:
                 self._cache[key] = entry
                 self._evict_if_full()
             return entry
+
+    def _load_or_derive(self, g1_id: str, g2_id: str, bp: BlockParams) -> CacheEntry:
+        """Load the pair from the on-disk cache if present, else derive it."""
+        if self._disk is not None:
+            with timed("disk_load_pair", pair=f"{g1_id}->{g2_id}"):
+                loaded = self._disk.load(g1_id, g2_id, bp)
+            if loaded is not None:
+                return CacheEntry(pair=loaded.pair, blocks=loaded.blocks)
+
+        with timed("derive_pair", pair=f"{g1_id}->{g2_id}"):
+            pair = derive_pair(self._scm, g1_id, g2_id)
+        with timed("detect_blocks", pair=f"{g1_id}->{g2_id}", n=pair.n_shared):
+            blocks = tuple(detect_blocks(pair, bp))
+        return CacheEntry(pair=pair, blocks=blocks)
 
     def peek(self, g1_id: str, g2_id: str) -> CacheEntry | None:
         """Return the cached entry without recording an access (no LRU bump, no derive)."""

@@ -337,9 +337,9 @@ Order is dependency-driven; each task is small and independently testable.
 - Inter-chromosomal jump → split.
 - Property test: every block is internally collinear (random fuzz).
 
-### 4.5 Cache ✅ (in-memory) / ⏸ (.npz deferred to v0.2)
+### 4.5 Cache ✅ (in-memory + .npz disk backing)
 - [x] `cache.py` — LRU dict capped at `max_pairs`. `get_or_derive` short-circuits on cache hit.
-- [ ] `.npz` write/read with manifest hash; on parameter change, blocks recomputed but PairwiseSCM retained (matches design §3.3 tuning paragraph). *(deferred to v0.2 per D16)*
+- [x] `diskcache.py` — `.npz` write/read with a two-level manifest hash. Dataset hash (input mtimes/sizes, blast-filtering params, code version, pair dtype) gates the PairwiseSCM `scms` array; block params + block dtype additionally gate the `blocks` array. On a block-param-only change the pair loads from disk and blocks are recomputed (design §3.3 tuning paragraph); on a dataset change the whole disk cache is ignored as stale.
 
 ### 4.6 API surface ✅
 - [x] `api/app.py` — FastAPI factory; CORS for `:5173` in dev only.
@@ -519,8 +519,8 @@ Work that wasn't in the original plan but landed before moving on to Phase 3.
 - [ ] `GET /api/stats/blocks` — single pair, optional `max_gap_sweep`. Block size + span histograms.
 - [ ] `BlockParams.svelte` — sliders for `max_gap`, `min_block_size`; live preview using cached `PairwiseSCM` (no re-derive).
 - [ ] `GET /api/export/scm_ids`, `/api/export/bed`, `/api/export/blocks`, `/api/export/png|svg` (frontend-side canvas export).
-- [ ] `syntrack precompute --config ... --pairs all|<list>` writes `.npz` cache and manifest.
-- [ ] On startup, load matching cache automatically (manifest-validated).
+- [x] `syntrack precompute --config ... --pairs all|adjacent|<list>` writes `.npz` cache and manifest.
+- [x] On startup, load matching cache automatically (manifest-validated) via `data.cache_dir`.
 - [ ] Tooltips: hover SCM/block → details panel.
 - [ ] Filtering-stats table in UI (collapsible per-genome).
 - [ ] Playwright happy-path E2E (load 2 genomes, reorder, highlight, FISH).

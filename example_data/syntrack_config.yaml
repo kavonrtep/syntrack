@@ -5,6 +5,10 @@
 
 data:
   genomes_csv: ./genomes.csv
+  # Optional precomputed pair cache. Run `syntrack precompute -c <this file>`
+  # to populate it, then pairs load from disk on cache miss instead of being
+  # re-derived. The cache self-invalidates when inputs/filter params/code change.
+  # cache_dir: ./cache
 
 blast_filtering:
   min_pident: 95.0

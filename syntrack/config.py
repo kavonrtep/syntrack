@@ -59,6 +59,9 @@ class PaletteCfg(_StrictModel):
 
 class DataCfg(_StrictModel):
     genomes_csv: Path
+    cache_dir: Path | None = None
+    """Optional dir of precomputed `.npz` pairs (see `syntrack precompute`). When
+    set and populated, pairs load from disk on cache miss instead of deriving."""
 
 
 class Config(_StrictModel):
@@ -81,4 +84,6 @@ def load_config(path: Path) -> Config:
     cfg = Config.model_validate(raw)
     if not cfg.data.genomes_csv.is_absolute():
         cfg.data.genomes_csv = (path.parent / cfg.data.genomes_csv).resolve()
+    if cfg.data.cache_dir is not None and not cfg.data.cache_dir.is_absolute():
+        cfg.data.cache_dir = (path.parent / cfg.data.cache_dir).resolve()
     return cfg

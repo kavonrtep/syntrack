@@ -8,6 +8,7 @@ from syntrack.api.state import AppState
 from syntrack.cache import PairCache
 from syntrack.config import Config, load_config
 from syntrack.derive.block import BlockParams
+from syntrack.diskcache import DiskPairStore
 from syntrack.io.blast import BlastFilterParams
 from syntrack.io.manifest import read_manifest
 from syntrack.perf import timed
@@ -40,15 +41,29 @@ def load_app_state(config_path: Path) -> AppState:
     with timed("load.scm_store", n_genomes=len(manifest)):
         scm_store = SCMStore.load(manifest, _to_filter_params(cfg), genome_store)
     block_params = _to_block_params(cfg)
+
+    # Optional on-disk backing (populated by `syntrack precompute`). Shared by
+    # both caches; DiskPairStore.open returns None when absent or stale.
+    disk_store = None
+    if cfg.data.cache_dir is not None and cfg.data.cache_dir.is_dir():
+        disk_store = DiskPairStore.open(
+            cfg.data.cache_dir,
+            manifest=manifest,
+            blast_params=_to_filter_params(cfg),
+            block_params=block_params,
+        )
+
     pair_cache = PairCache(
         scm_store,
         block_params,
         max_pairs=cfg.pair_cache.max_pairs,
+        disk_store=disk_store,
     )
     paint_cache = PairCache(
         scm_store,
         block_params,
         max_pairs=cfg.pair_cache.paint_max_pairs,
+        disk_store=disk_store,
     )
     return AppState(
         config=cfg,

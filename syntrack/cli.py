@@ -153,5 +153,116 @@ def serve(
     )
 
 
+def _resolve_pairs(spec: str, genome_ids: list[str]) -> list[tuple[str, str]]:
+    """Turn a --pairs spec into an ordered list of (g1, g2) pairs.
+
+    ``all``       — every ordered pair (N*(N-1)).
+    ``adjacent``  — manifest-order neighbours, both directions.
+    ``g1:g2,...`` — explicit colon-separated pairs.
+    """
+    import itertools
+
+    known = set(genome_ids)
+    spec = spec.strip()
+    if spec == "all":
+        return list(itertools.permutations(genome_ids, 2))
+    if spec == "adjacent":
+        out: list[tuple[str, str]] = []
+        for a, b in itertools.pairwise(genome_ids):
+            out.extend([(a, b), (b, a)])
+        return out
+    pairs: list[tuple[str, str]] = []
+    for raw_token in spec.split(","):
+        token = raw_token.strip()
+        if not token:
+            continue
+        g1, sep, g2 = token.partition(":")
+        if not sep or g1 not in known or g2 not in known or g1 == g2:
+            raise typer.BadParameter(
+                f"invalid pair {token!r}; expected 'g1:g2' with distinct known genome ids"
+            )
+        pairs.append((g1, g2))
+    if not pairs:
+        raise typer.BadParameter("no pairs parsed from --pairs")
+    return pairs
+
+
+@app.command()
+def precompute(
+    config_path: Path = typer.Option(
+        None,
+        "--config",
+        "-c",
+        envvar="SYNTRACK_CONFIG",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to syntrack_config.yaml. Falls back to $SYNTRACK_CONFIG.",
+    ),
+    output: Path = typer.Option(
+        None,
+        "--output",
+        "-o",
+        file_okay=False,
+        help="Cache directory to write. Defaults to data.cache_dir from the config.",
+    ),
+    pairs: str = typer.Option(
+        "all",
+        "--pairs",
+        help="Which pairs: 'all', 'adjacent', or a list like 'A:B,B:A,C:D'.",
+    ),
+) -> None:
+    """Derive pairs and write a `.npz` disk cache so `serve` skips re-derivation."""
+    from syntrack.config import load_config
+    from syntrack.diskcache import write_cache
+    from syntrack.io.manifest import read_manifest
+    from syntrack.loader import _to_block_params, _to_filter_params
+    from syntrack.perf import configure_logging
+    from syntrack.store.genome import GenomeStore
+    from syntrack.store.scm import SCMStore
+
+    configure_logging()
+    config_path = _require_config(config_path)
+    cfg = load_config(config_path)
+
+    out_dir = output or cfg.data.cache_dir
+    if out_dir is None:
+        typer.echo(
+            "error: no output directory — pass --output or set data.cache_dir in the config",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        manifest = read_manifest(cfg.data.genomes_csv)
+        genome_store = GenomeStore.load(manifest, cfg.palette, cfg.genome_labels)
+        scm_store = SCMStore.load(manifest, _to_filter_params(cfg), genome_store)
+        pair_list = _resolve_pairs(pairs, scm_store.genome_ids)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    total = len(pair_list)
+    typer.echo(f"Precomputing {total} pairs into {out_dir} ...")
+
+    def _progress(i: int, total: int, g1: str, g2: str, n_shared: int) -> None:
+        typer.echo(f"  [{i + 1:>4}/{total}] {g1} -> {g2}: {n_shared:,} shared SCMs")
+
+    write_cache(
+        out_dir,
+        scm_store,
+        pair_list,
+        blast_params=_to_filter_params(cfg),
+        block_params=_to_block_params(cfg),
+        manifest=manifest,
+        progress=_progress,
+    )
+
+    disk_bytes = sum(f.stat().st_size for f in out_dir.glob("*.npz"))
+    typer.echo("")
+    typer.echo(f"Done: {total} pairs, {disk_bytes / 1e9:.2f} GB in {out_dir}")
+    typer.echo("Set data.cache_dir to this path (or it already is) and `syntrack serve`.")
+
+
 if __name__ == "__main__":
     app()
