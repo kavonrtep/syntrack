@@ -13,7 +13,7 @@
     SCMsResponse,
   } from './api/types'
   import { alignmentDelta } from './canvas/alignment'
-  import { referenceColorMap } from './canvas/colors'
+
   import {
     DEFAULT_VIEWPORT,
     panByFraction,
@@ -55,6 +55,13 @@
   let order = $derived(fullOrder.filter((id) => visibleIds.has(id)))
   // null = "follow top genome" (default); a genome ID locks coloring to that genome.
   let selectedReferenceId = $state<string | null>(null)
+
+  // User-chosen chromosome colors for the reference genome. Empty = all grey.
+  const seqColors = new SvelteMap<string, string>()
+  const DEFAULT_SEQ_COLOR = '#888888'
+  // Track which seq is being edited via the native color picker.
+  let colorPickerSeq = $state<string | null>(null)
+  let colorPickerEl: HTMLInputElement | undefined = $state()
 
   let globalViewport = $state<Viewport>(DEFAULT_VIEWPORT)
   type ScopeDelta = { zoomFactor: number; centerDelta: number }
@@ -98,6 +105,7 @@
 
   let dragState = $state<{
     startX: number
+    startY: number
     startCenter: number
     target: string | null
   } | null>(null)
@@ -204,9 +212,24 @@
     }
     return genomesInOrder[0] ?? null
   })
-  let refColorMap = $derived<Map<string, string>>(
-    referenceGenome ? referenceColorMap(referenceGenome) : new Map(),
-  )
+  let refColorMap = $derived.by<Map<string, string>>(() => {
+    if (!referenceGenome) return new Map()
+    const map = new Map<string, string>()
+    for (const s of referenceGenome.sequences) {
+      map.set(s.name, seqColors.get(s.name) ?? DEFAULT_SEQ_COLOR)
+    }
+    return map
+  })
+
+  // Clear user-chosen colors when the reference genome changes.
+  let prevRefId: string | undefined
+  $effect(() => {
+    const id = referenceGenome?.id
+    if (id !== prevRefId) {
+      seqColors.clear()
+      prevRefId = id
+    }
+  })
 
   let lodModeValue = $derived.by<'block' | 'scm'>(() => {
     if (genomesInOrder.length === 0 || canvasWidth < 2) return 'block'
@@ -509,7 +532,7 @@
     const scoped = e.shiftKey ? pointerGenomeId(e.clientY) : null
     const target = scoped
     const startCenter = target ? effectiveViewport(target).center : globalViewport.center
-    dragState = { startX: e.clientX, startCenter, target }
+    dragState = { startX: e.clientX, startY: e.clientY, startCenter, target }
     ;(e.target as Element).setPointerCapture(e.pointerId)
   }
 
@@ -602,7 +625,7 @@
     }
   }
 
-  function onPointerUp(_e: PointerEvent) {
+  function onPointerUp(e: PointerEvent) {
     if (pendingFrame !== null) {
       cancelAnimationFrame(pendingFrame)
       pendingFrame = null
@@ -614,6 +637,21 @@
       }
       void finalizeHighlight()
       return
+    }
+    // Detect clean click (no drag movement, no modifiers) on the reference
+    // genome to open the chromosome color picker.
+    const ds = dragState
+    if (ds && !pendingPointer) {
+      const dx = Math.abs(e.clientX - ds.startX)
+      const dy = Math.abs(e.clientY - ds.startY)
+      if (dx < 4 && dy < 4 && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        const click = resolveTrackClick(e.clientX, e.clientY)
+        if (click && referenceGenome && click.genome.id === referenceGenome.id) {
+          openColorPicker(click.seq)
+          dragState = null
+          return
+        }
+      }
     }
     if (pendingPointer) {
       applyDragFromPointer(pendingPointer.clientX)
@@ -739,6 +777,26 @@
     } else {
       fishVisible.add(label)
     }
+  }
+
+  // ----------------------------- Chromosome color picker -------------------
+
+  function openColorPicker(seqName: string): void {
+    if (!colorPickerEl) return
+    colorPickerSeq = seqName
+    colorPickerEl.value = seqColors.get(seqName) ?? DEFAULT_SEQ_COLOR
+    colorPickerEl.click()
+  }
+
+  function onColorPicked(e: Event): void {
+    const hex = (e.target as HTMLInputElement).value
+    if (colorPickerSeq) {
+      seqColors.set(colorPickerSeq, hex)
+    }
+  }
+
+  function resetSeqColors(): void {
+    seqColors.clear()
   }
 
   function onKeyDown(e: KeyboardEvent): void {
@@ -927,12 +985,25 @@
         {/each}
       </select>
     </label>
+    <button
+      onclick={resetSeqColors}
+      disabled={seqColors.size === 0}
+      title="Reset all chromosome colors to grey"
+    >
+      Reset colors
+    </button>
   {/if}
+  <input
+    bind:this={colorPickerEl}
+    type="color"
+    style="position:absolute;opacity:0;pointer-events:none"
+    oninput={onColorPicked}
+  />
   <span
     class="hint"
-    title="Drag the label above any track to reorder. Shift + wheel/drag over a bar: scope that genome. Double-click a bar: vertical alignment. Ctrl / Cmd + click-drag on a bar: highlight a region (Esc to clear)."
+    title="Drag the label above any track to reorder. Shift + wheel/drag over a bar: scope that genome. Double-click a bar: vertical alignment. Ctrl / Cmd + click-drag on a bar: highlight a region (Esc to clear). Click a chromosome on the reference genome to pick its color."
   >
-    label = reorder · Shift = scope · dbl-click = align · Ctrl-drag = highlight
+    label = reorder · Shift = scope · dbl-click = align · Ctrl-drag = highlight · click ref = color
   </span>
   <label class="fade-ctl" title="Dim the reference-palette coloring so the highlight overlay stands out. 0 = normal, slide right to fade.">
     Fade
