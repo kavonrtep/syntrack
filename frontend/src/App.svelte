@@ -383,11 +383,38 @@
     return order.includes(id)
   }
 
+  // Sidebar list: visible genomes in display order, then hidden genomes in
+  // their original server order — so the sidebar reflects reorder drag.
+  let sidebarGenomes = $derived.by<Genome[]>(() => {
+    if (!allGenomes) return []
+    const byId = new Map(allGenomes.map((g) => [g.id, g]))
+    const visible = order
+      .map((id) => byId.get(id))
+      .filter((g): g is Genome => g !== undefined)
+    const visibleIds = new Set(order)
+    const hidden = allGenomes.filter((g) => !visibleIds.has(g.id))
+    return [...visible, ...hidden]
+  })
+
   function toggleVisible(id: string) {
     if (order.includes(id)) {
       order = order.filter((x) => x !== id)
     } else {
-      order = [...order, id]
+      // Re-insert at the position that preserves server order relative to
+      // already-visible genomes, so it returns to its "natural" slot.
+      if (!allGenomes) return
+      const serverIdx = allGenomes.findIndex((g) => g.id === id)
+      let insertAt = order.length
+      for (let i = 0; i < order.length; i++) {
+        const otherServerIdx = allGenomes.findIndex((g) => g.id === order[i])
+        if (otherServerIdx > serverIdx) {
+          insertAt = i
+          break
+        }
+      }
+      const next = [...order]
+      next.splice(insertAt, 0, id)
+      order = next
     }
   }
 
@@ -682,10 +709,9 @@
       return
     }
     const label = file.name.replace(/\.[^.]+$/, '')
+    // If a set with the same name exists, replace it silently.
     if (fishSets.has(label)) {
-      error = `Marker set "${label}" already loaded — delete it first or rename the file`
-      fishFileInput.value = ''
-      return
+      await deleteFishSet(label)
     }
     const color = nextFishColor()
     fishLoading = true
@@ -917,8 +943,12 @@
 
 <main>
   {#if error}
-    <div class="error">{error}</div>
-  {:else if allGenomes === null}
+    <div class="error-banner" role="alert">
+      <span>{error}</span>
+      <button onclick={() => (error = null)} title="Dismiss">×</button>
+    </div>
+  {/if}
+  {#if allGenomes === null}
     <p class="loading">Loading genomes…</p>
   {:else}
     <aside class="sidebar" aria-label="Genome visibility">
@@ -929,7 +959,7 @@
           <button onclick={selectNone} disabled={order.length === 0}>None</button>
         </div>
       </div>
-      {#each allGenomes as g (g.id)}
+      {#each sidebarGenomes as g (g.id)}
         {@const hlCount = highlightedByGenome.get(g.id) ?? 0}
         <label class="genome-toggle" class:hidden={!isVisible(g.id)}>
           <input
@@ -1254,9 +1284,37 @@
     color: #e44;
   }
 
-  .loading,
-  .error {
+  .loading {
     margin: 1em;
+  }
+
+  .error-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    padding: 0.5em 1em;
+    background: #3a1c1c;
+    border-bottom: 1px solid #6b2a2a;
+    color: #f8a0a0;
+    font-size: 0.9em;
+  }
+
+  .error-banner span {
+    flex: 1;
+  }
+
+  .error-banner button {
+    background: none;
+    border: none;
+    color: #f8a0a0;
+    font-size: 1.1em;
+    cursor: pointer;
+    padding: 0 0.3em;
+    line-height: 1;
+  }
+
+  .error-banner button:hover {
+    color: #fff;
   }
 
   .canvas-container {
