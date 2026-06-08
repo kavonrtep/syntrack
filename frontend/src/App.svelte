@@ -96,7 +96,10 @@
   const pairScms = new Map<string, SCMsResponse>()
   const paintByPair = new Map<string, PaintRegion[]>()
   let dataVersion = $state(0)
-  let loadingCount = $state(0)
+  // Plain counter — not reactive. Exposed to the template via dataVersion bumps.
+  let _loadingCount = 0
+  // Reactive loading flag set outside effects (from Promise callbacks only).
+  let loadingData = $state(false)
   function pairKey(g1: string, g2: string, ref: string): string {
     return `${g1}|${g2}|${ref}`
   }
@@ -303,15 +306,17 @@
       pending.push({ key, promise: api.blocks(g1, g2, { reference: ref }, signal) })
     }
     if (pending.length === 0) return
-    loadingCount += pending.length
+    _loadingCount += pending.length
+    loadingData = true
     void Promise.allSettled(pending.map((p) => p.promise)).then((results) => {
-      if (signal.aborted) return
+      _loadingCount -= pending.length
+      if (signal.aborted) { loadingData = _loadingCount > 0; return }
       for (let i = 0; i < results.length; i++) {
         const r = results[i]
         if (r.status === 'fulfilled') pairBlocks.set(pending[i].key, r.value)
       }
       dataVersion++
-      loadingCount -= pending.length
+      loadingData = _loadingCount > 0
     })
   })
 
@@ -331,15 +336,17 @@
       pending.push({ key, promise: api.scms(g1, g2, { reference: ref }, signal) })
     }
     if (pending.length === 0) return
-    loadingCount += pending.length
+    _loadingCount += pending.length
+    loadingData = true
     void Promise.allSettled(pending.map((p) => p.promise)).then((results) => {
-      if (signal.aborted) return
+      _loadingCount -= pending.length
+      if (signal.aborted) { loadingData = _loadingCount > 0; return }
       for (let i = 0; i < results.length; i++) {
         const r = results[i]
         if (r.status === 'fulfilled') pairScms.set(pending[i].key, r.value)
       }
       dataVersion++
-      loadingCount -= pending.length
+      loadingData = _loadingCount > 0
     })
   })
 
@@ -356,15 +363,17 @@
       pending.push({ key, promise: api.paint(g.id, ref, signal) })
     }
     if (pending.length === 0) return
-    loadingCount += pending.length
+    _loadingCount += pending.length
+    loadingData = true
     void Promise.allSettled(pending.map((p) => p.promise)).then((results) => {
-      if (signal.aborted) return
+      _loadingCount -= pending.length
+      if (signal.aborted) { loadingData = _loadingCount > 0; return }
       for (let i = 0; i < results.length; i++) {
         const r = results[i]
         if (r.status === 'fulfilled') paintByPair.set(pending[i].key, r.value.regions)
       }
       dataVersion++
-      loadingCount -= pending.length
+      loadingData = _loadingCount > 0
     })
   })
 
@@ -1205,11 +1214,8 @@
           {/each}
         </div>
       </div>
-      {#if loadingCount > 0}
-        {@const total = loadingCount}
-        <div class="badge">
-          loading {total} request{total === 1 ? '' : 's'}…
-        </div>
+      {#if loadingData}
+        <div class="badge">loading…</div>
       {/if}
     </div>
   {/if}
