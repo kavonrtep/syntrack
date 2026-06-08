@@ -71,6 +71,17 @@ Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs)
 - **Selectable reference genome**: "Color by" dropdown in the header lets the user pick any loaded genome as the coloring reference instead of the hardcoded top genome. Backend already supported arbitrary `?reference=`; this is a frontend-only change.
 - Input data format documentation added to `deploy/README.md`.
 
+### v0.2.2 ✅ (UX fixes + alignment perf + user-controlled coloring — #3, #4)
+- **Non-blocking errors**: error banner is dismissible, no longer replaces the entire UI (#3).
+- **Duplicate marker sets**: reloading the same filename auto-replaces the old set (#3).
+- **Sidebar reflects canvas order**: genome list follows drag-reorder; re-checking a hidden genome restores its position (#4). Separated `fullOrder` (all genomes, user-ordered) from `visibleIds` (checked set).
+- **Genome order preserved across reset/All/None**: visibility changes never discard drag-reorder.
+- **Alignment loading indicator**: "aligning..." status bar + wait cursor during double-click alignment; prevents double-fire.
+- **Visible-only alignment targets**: frontend sends only visible genome IDs, backend accepts optional `?targets` parameter, skipping hidden genomes.
+- **Chromosome-filtered pair derivation**: new `derive_pair_on_seq()` filters to the clicked chromosome before the inner-join, ~7x cheaper than full-genome derivation on cache miss.
+- **User-controlled chromosome coloring**: all chromosomes start grey; clicking a chromosome on the reference genome opens the native color picker; chosen colors propagate to all tracks, ribbons, and SCM lines. "Reset colors" button reverts to grey.
+- Input data update instructions added to `deploy/README.md`.
+
 ### Still deferred (v0.2.x+)
 - Block-param slider UI + `/api/stats/blocks` sweep diagnostics. Phase 4.
 - Exports (BED, TSV, txt, PNG/SVG). Phase 4.
