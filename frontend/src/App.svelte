@@ -43,13 +43,16 @@
 
   // ----------------------------- State -----------------------------------
 
-  // `allGenomes` is the stable server-load order — used for the visibility
-  // sidebar. `order` is the *display* order of genomes that are currently
-  // checked on. Unchecking removes a genome from `order`; checking appends it
-  // at the end.
+  // `allGenomes` is the stable server-load order (immutable after mount).
+  // `fullOrder` tracks the user's preferred display order for *all* genomes
+  // (visible and hidden) — drag-reorder mutates this.  `visibleIds` tracks
+  // which genomes are currently checked.  The derived `order` is the visible
+  // subset of `fullOrder`, used by all rendering code.
   let allGenomes = $state<Genome[] | null>(null)
   let universeSize = $state(0)
-  let order = $state<string[]>([])
+  let fullOrder = $state<string[]>([])
+  const visibleIds = new SvelteSet<string>()
+  let order = $derived(fullOrder.filter((id) => visibleIds.has(id)))
   // null = "follow top genome" (default); a genome ID locks coloring to that genome.
   let selectedReferenceId = $state<string | null>(null)
 
@@ -151,7 +154,8 @@
     try {
       const [genomeResp, cfgResp] = await Promise.all([api.genomes(), api.config()])
       allGenomes = genomeResp.genomes
-      order = genomeResp.genomes.map((g) => g.id) // all visible initially
+      fullOrder = genomeResp.genomes.map((g) => g.id)
+      for (const g of genomeResp.genomes) visibleIds.add(g.id)
       universeSize = genomeResp.scm_universe_size
       config = cfgResp
     } catch (err) {
@@ -380,51 +384,40 @@
   // ----------------------------- Visibility (sidebar) --------------------
 
   function isVisible(id: string): boolean {
-    return order.includes(id)
+    return visibleIds.has(id)
   }
 
-  // Sidebar list: visible genomes in display order, then hidden genomes in
-  // their original server order — so the sidebar reflects reorder drag.
+  // Sidebar list: visible genomes in their current display order, then
+  // hidden genomes in their fullOrder position — so drag-reorder and
+  // uncheck/re-check both behave intuitively.
   let sidebarGenomes = $derived.by<Genome[]>(() => {
     if (!allGenomes) return []
     const byId = new Map(allGenomes.map((g) => [g.id, g]))
     const visible = order
       .map((id) => byId.get(id))
       .filter((g): g is Genome => g !== undefined)
-    const visibleIds = new Set(order)
-    const hidden = allGenomes.filter((g) => !visibleIds.has(g.id))
+    const hidden = fullOrder
+      .filter((id) => !visibleIds.has(id))
+      .map((id) => byId.get(id))
+      .filter((g): g is Genome => g !== undefined)
     return [...visible, ...hidden]
   })
 
   function toggleVisible(id: string) {
-    if (order.includes(id)) {
-      order = order.filter((x) => x !== id)
+    if (visibleIds.has(id)) {
+      visibleIds.delete(id)
     } else {
-      // Re-insert at the position that preserves server order relative to
-      // already-visible genomes, so it returns to its "natural" slot.
-      if (!allGenomes) return
-      const serverIdx = allGenomes.findIndex((g) => g.id === id)
-      let insertAt = order.length
-      for (let i = 0; i < order.length; i++) {
-        const otherServerIdx = allGenomes.findIndex((g) => g.id === order[i])
-        if (otherServerIdx > serverIdx) {
-          insertAt = i
-          break
-        }
-      }
-      const next = [...order]
-      next.splice(insertAt, 0, id)
-      order = next
+      visibleIds.add(id)
     }
   }
 
   function selectAll() {
     if (!allGenomes) return
-    order = allGenomes.map((g) => g.id)
+    for (const g of allGenomes) visibleIds.add(g.id)
   }
 
   function selectNone() {
-    order = []
+    visibleIds.clear()
   }
 
   // ----------------------------- Interaction -----------------------------
@@ -852,10 +845,15 @@
     reorderFromIdx = null
     reorderOverIdx = null
     if (fromIdx === null || fromIdx === toIdx) return
-    const next = [...order]
-    const [moved] = next.splice(fromIdx, 1)
-    next.splice(toIdx, 0, moved)
-    order = next
+    // Map visible-list indices to fullOrder positions and splice there so
+    // hidden genomes keep their relative slots.
+    const movedId = order[fromIdx]
+    const targetId = order[toIdx]
+    const next = fullOrder.filter((id) => id !== movedId)
+    const targetPos = next.indexOf(targetId)
+    // Insert before or after the target depending on drag direction.
+    next.splice(fromIdx < toIdx ? targetPos + 1 : targetPos, 0, movedId)
+    fullOrder = next
   }
 
   function onHandleDragEnd() {
@@ -955,8 +953,8 @@
       <div class="sidebar-head">
         <span class="sidebar-title">Genomes</span>
         <div class="sidebar-actions">
-          <button onclick={selectAll} disabled={order.length === allGenomes.length}>All</button>
-          <button onclick={selectNone} disabled={order.length === 0}>None</button>
+          <button onclick={selectAll} disabled={visibleIds.size === allGenomes.length}>All</button>
+          <button onclick={selectNone} disabled={visibleIds.size === 0}>None</button>
         </div>
       </div>
       {#each sidebarGenomes as g (g.id)}
