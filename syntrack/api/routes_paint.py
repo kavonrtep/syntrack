@@ -69,14 +69,39 @@ def get_paint(
     ref_seq_names = [s.name for s in state.genome_store[reference].sequences]
     genome_seq_names = [s.name for s in state.genome_store[genome_id].sequences]
 
-    regions = [
-        PaintRegionSchema(
-            seq=genome_seq_names[b.g1_seq_idx],
-            start=b.g1_start,
-            end=b.g1_end,
-            reference_seq=ref_seq_names[b.g2_seq_idx],
-            scm_count=b.scm_count,
+    # Build regions from blocks, then merge adjacent regions on the same
+    # sequence with the same reference_seq to reduce payload size.
+    raw: list[PaintRegionSchema] = []
+    for b in entry.blocks:
+        raw.append(
+            PaintRegionSchema(
+                seq=genome_seq_names[b.g1_seq_idx],
+                start=b.g1_start,
+                end=b.g1_end,
+                reference_seq=ref_seq_names[b.g2_seq_idx],
+                scm_count=b.scm_count,
+            )
         )
-        for b in entry.blocks
-    ]
+
+    # Merge pass: blocks are sorted by (g1_seq_idx, g1_start), so adjacent
+    # entries on the same sequence with matching reference_seq are contiguous.
+    regions: list[PaintRegionSchema]
+    if len(raw) <= 1:
+        regions = raw
+    else:
+        regions = [raw[0]]
+        for r in raw[1:]:
+            prev = regions[-1]
+            if prev.seq == r.seq and prev.reference_seq == r.reference_seq:
+                # Merge: extend the span and accumulate SCM count.
+                regions[-1] = PaintRegionSchema(
+                    seq=prev.seq,
+                    start=prev.start,
+                    end=r.end,
+                    reference_seq=prev.reference_seq,
+                    scm_count=prev.scm_count + r.scm_count,
+                )
+            else:
+                regions.append(r)
+
     return PaintResponse(genome_id=genome_id, reference=reference, regions=regions)

@@ -275,7 +275,15 @@
     return out
   })
 
+  // AbortControllers — cancel in-flight requests when dependencies change.
+  let blocksAbort: AbortController | undefined
+  let scmsAbort: AbortController | undefined
+  let paintAbort: AbortController | undefined
+
   $effect(() => {
+    blocksAbort?.abort()
+    blocksAbort = new AbortController()
+    const { signal } = blocksAbort
     const ref = referenceGenome?.id
     if (!ref) return
     for (let i = 0; i < genomesInOrder.length - 1; i++) {
@@ -284,16 +292,19 @@
       const key = pairKey(g1, g2, ref)
       if (pairBlocks.has(key) || loadingBlocks.has(key)) continue
       loadingBlocks.add(key)
-      api.blocks(g1, g2, { reference: ref }).then(
+      api.blocks(g1, g2, { reference: ref }, signal).then(
         (resp) => pairBlocks.set(key, resp),
         (err) => {
-          error = `Failed to load blocks for ${g1}/${g2}: ${err}`
+          if (!signal.aborted) error = `Failed to load blocks for ${g1}/${g2}: ${err}`
         },
       ).finally(() => loadingBlocks.delete(key))
     }
   })
 
   $effect(() => {
+    scmsAbort?.abort()
+    scmsAbort = new AbortController()
+    const { signal } = scmsAbort
     if (lodModeValue !== 'scm') return
     const ref = referenceGenome?.id
     if (!ref) return
@@ -303,26 +314,29 @@
       const key = pairKey(g1, g2, ref)
       if (pairScms.has(key) || loadingScms.has(key)) continue
       loadingScms.add(key)
-      api.scms(g1, g2, { reference: ref }).then(
+      api.scms(g1, g2, { reference: ref }, signal).then(
         (resp) => pairScms.set(key, resp),
         (err) => {
-          error = `Failed to load SCMs for ${g1}/${g2}: ${err}`
+          if (!signal.aborted) error = `Failed to load SCMs for ${g1}/${g2}: ${err}`
         },
       ).finally(() => loadingScms.delete(key))
     }
   })
 
   $effect(() => {
+    paintAbort?.abort()
+    paintAbort = new AbortController()
+    const { signal } = paintAbort
     const ref = referenceGenome?.id
     if (!ref) return
     for (const g of genomesInOrder) {
       const key = paintKey(g.id, ref)
       if (paintByPair.has(key) || loadingPaint.has(key)) continue
       loadingPaint.add(key)
-      api.paint(g.id, ref).then(
+      api.paint(g.id, ref, signal).then(
         (resp) => paintByPair.set(key, resp.regions),
         (err) => {
-          error = `Failed to load painting for ${g.id}: ${err}`
+          if (!signal.aborted) error = `Failed to load painting for ${g.id}: ${err}`
         },
       ).finally(() => loadingPaint.delete(key))
     }
@@ -453,6 +467,16 @@
     return idx === null ? null : genomesInOrder[idx].id
   }
 
+  // rAF-throttled wheel zoom: accumulate zoom factor across coalesced wheel
+  // events and apply once per animation frame (same pattern as pointer-move).
+  let pendingWheel: {
+    cursorFraction: number
+    accumulatedFactor: number
+    scoped: string | null
+    clientY: number
+  } | null = null
+  let pendingWheelFrame: number | null = null
+
   function onWheel(e: WheelEvent) {
     if (!trackCanvas) return
     e.preventDefault()
@@ -460,16 +484,29 @@
     const cursorFraction = (e.clientX - rect.left) / rect.width
     const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25
     const scoped = e.shiftKey ? pointerGenomeId(e.clientY) : null
-    if (scoped) {
-      const current = effectiveViewport(scoped)
-      const next = zoomAtFraction(current, cursorFraction, factor)
-      viewportOverrides.set(scoped, {
-        zoomFactor: next.zoom / globalViewport.zoom,
-        centerDelta: next.center - globalViewport.center,
-      })
+    if (pendingWheel && pendingWheel.scoped === scoped) {
+      pendingWheel.cursorFraction = cursorFraction
+      pendingWheel.accumulatedFactor *= factor
     } else {
-      globalViewport = zoomAtFraction(globalViewport, cursorFraction, factor)
+      pendingWheel = { cursorFraction, accumulatedFactor: factor, scoped, clientY: e.clientY }
     }
+    if (pendingWheelFrame !== null) return
+    pendingWheelFrame = requestAnimationFrame(() => {
+      pendingWheelFrame = null
+      const pw = pendingWheel
+      pendingWheel = null
+      if (!pw) return
+      if (pw.scoped) {
+        const current = effectiveViewport(pw.scoped)
+        const next = zoomAtFraction(current, pw.cursorFraction, pw.accumulatedFactor)
+        viewportOverrides.set(pw.scoped, {
+          zoomFactor: next.zoom / globalViewport.zoom,
+          centerDelta: next.center - globalViewport.center,
+        })
+      } else {
+        globalViewport = zoomAtFraction(globalViewport, pw.cursorFraction, pw.accumulatedFactor)
+      }
+    })
   }
 
   /** Resolve the clicked (genome, seq, local bp, xCanvas) or null if the
