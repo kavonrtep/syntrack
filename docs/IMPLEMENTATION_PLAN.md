@@ -82,14 +82,20 @@ Running on the real pea dataset (`example_data/`, 8 genomes, 1.39 M unique SCMs)
 - **User-controlled chromosome coloring**: all chromosomes start grey; clicking a chromosome on the reference genome opens the native color picker; chosen colors propagate to all tracks, ribbons, and SCM lines. "Reset colors" button reverts to grey.
 - Input data update instructions added to `deploy/README.md`.
 
+### v0.2.3 ✅ (performance — 11-genome dataset)
+- **rAF-throttled wheel zoom**: batch wheel events through `requestAnimationFrame` to cap redraws at 60 FPS (was 100+ Hz unthrottled).
+- **AbortController on API effects**: rapid reference/order changes cancel in-flight requests instead of doubling network traffic.
+- **Paint region merging**: server-side merge of adjacent same-color paint regions reduces payload by ~30–50%.
+- Performance analysis documented in `docs/PERFORMANCE_ANALYSIS.md`.
+
 ### Still deferred (v0.2.x+)
 - Block-param slider UI + `/api/stats/blocks` sweep diagnostics. Phase 4.
 - Exports (BED, TSV, txt, PNG/SVG). Phase 4.
 - `syntrack precompute` + on-disk `.npz` cache + manifest-hash invalidation. Phase 4.
-- Request debouncing + `AbortController` cancellation on rapid zoom. Phase 4 polish.
 - Axis ticks on the track canvas. Phase 4 polish.
 - `syntrack stats` CLI. Phase 4 polish.
 - Playwright E2E. Phase 4 polish.
+- Rust/WASM geometry computation + OffscreenCanvas Web Worker + binary API responses (see `docs/PERFORMANCE_ANALYSIS.md` Phase 3).
 
 ---
 
