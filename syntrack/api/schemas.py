@@ -281,3 +281,33 @@ class FishSetResponse(FishSetSchema):
 
 class FishListResponse(_Schema):
     sets: list[FishSetSchema]
+
+
+# ------------------------------ /api/fish/density --------------------------
+
+
+class FishDensityRequest(_Schema):
+    """Request per-genome whole-genome density histograms for FISH sets.
+
+    ``bins`` is the histogram resolution (≈ render width in px). ``labels``
+    selects which stored sets to include; omit/empty for all of them.
+    """
+
+    bins: int = Field(gt=0, le=20_000)
+    labels: list[str] | None = None
+
+
+class FishDensitySet(_Schema):
+    label: str
+    color: str
+    scm_count: int
+    """Total SCMs in the set (across the whole universe)."""
+    max_count: int
+    """Largest single-bin count over all genomes — for intensity normalization."""
+    genomes: dict[str, list[int]]
+    """``genome_id -> [count per bin]`` (length == ``bins``), over [0, total_length)."""
+
+
+class FishDensityResponse(_Schema):
+    bins: int
+    sets: list[FishDensitySet]

@@ -146,3 +146,68 @@ def test_list_empty(client: TestClient) -> None:
     resp = client.get("/api/fish")
     assert resp.status_code == 200
     assert resp.json()["sets"] == []
+
+
+# ------------------------------ /api/fish/density --------------------------
+
+
+def test_fish_density_basic(client: TestClient) -> None:
+    client.post(
+        "/api/fish",
+        json={"scm_ids": ["OG01", "OG02", "OG03"], "label": "red", "color": "#FF0000"},
+    )
+    resp = client.post("/api/fish/density", json={"bins": 10})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bins"] == 10
+    assert len(body["sets"]) == 1
+    s = body["sets"][0]
+    assert s["label"] == "red"
+    assert s["color"] == "#FF0000"
+    assert s["scm_count"] == 3
+    assert s["max_count"] == 3
+
+    # A & B: OG01..OG03 at offsets 100/200/300; total_length 10000; bin width
+    # 1000 -> all three fall in bin 0. C has none of them.
+    for gid in ("A", "B"):
+        col = s["genomes"][gid]
+        assert len(col) == 10
+        assert col[0] == 3
+        assert sum(col) == 3
+    assert sum(s["genomes"]["C"]) == 0
+
+
+def test_fish_density_specific_labels_and_presence(client: TestClient) -> None:
+    client.post("/api/fish", json={"scm_ids": ["OG01"], "label": "red", "color": "#FF0000"})
+    # OG05 is present in all three genomes (A: OG01..10, B: OG01..08, C: OG05..14).
+    client.post("/api/fish", json={"scm_ids": ["OG05"], "label": "green", "color": "#00FF00"})
+    resp = client.post("/api/fish/density", json={"bins": 5, "labels": ["green"]})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [s["label"] for s in body["sets"]] == ["green"]
+    g = body["sets"][0]
+    for gid in ("A", "B", "C"):
+        assert sum(g["genomes"][gid]) == 1  # OG05 present once in each
+
+
+def test_fish_density_unknown_label_404(client: TestClient) -> None:
+    resp = client.post("/api/fish/density", json={"bins": 5, "labels": ["nope"]})
+    assert resp.status_code == 404
+
+
+def test_fish_density_no_sets_returns_empty(client: TestClient) -> None:
+    resp = client.post("/api/fish/density", json={"bins": 5})
+    assert resp.status_code == 200
+    assert resp.json()["sets"] == []
+
+
+def test_fish_density_bins_validation(client: TestClient) -> None:
+    assert client.post("/api/fish/density", json={"bins": 0}).status_code == 422
+    assert client.post("/api/fish/density", json={"bins": 999_999}).status_code == 422
+
+
+def test_fish_density_dropped_after_delete(client: TestClient) -> None:
+    client.post("/api/fish", json={"scm_ids": ["OG01"], "label": "tmp", "color": "#FF0000"})
+    assert client.delete("/api/fish/tmp").status_code == 204
+    # Indices were removed too -> density no longer knows the label.
+    assert client.post("/api/fish/density", json={"bins": 5, "labels": ["tmp"]}).status_code == 404

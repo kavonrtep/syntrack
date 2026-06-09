@@ -13,6 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from syntrack.api.deps import get_state
 from syntrack.api.schemas import (
+    FishDensityRequest,
+    FishDensityResponse,
+    FishDensitySet,
     FishGenomeCoverage,
     FishListResponse,
     FishPositionSchema,
@@ -29,20 +32,26 @@ def _strand_str(strand: int) -> str:
     return "+" if strand > 0 else "-"
 
 
+def _resolve_indices(scm_ids: list[str], state: AppState) -> np.ndarray:
+    """Map SCM-ID strings to a sorted, unique ``int32`` array of universe indices.
+
+    Unknown IDs are silently skipped. Uniqueness is required by the
+    ``assume_unique=True`` membership tests downstream.
+    """
+    idxs = [idx for sid in scm_ids if (idx := state.scm_store.universe_index.get(sid)) is not None]
+    if not idxs:
+        return np.empty(0, dtype=np.int32)
+    return np.unique(np.array(idxs, dtype=np.int32))
+
+
 def _resolve_fish_set(
     req: FishSetRequest,
+    scm_arr: np.ndarray,
     state: AppState,
     limit: int = 500,
 ) -> FishSetResponse:
-    """Resolve SCM IDs to positions across all genomes."""
-    # Map requested SCM IDs to universe indices, silently skipping unknowns.
-    scm_idxs: list[int] = []
-    for sid in req.scm_ids:
-        idx = state.scm_store.universe_index.get(sid)
-        if idx is not None:
-            scm_idxs.append(idx)
-
-    if not scm_idxs:
+    """Resolve a FISH set (given its universe-index array) to positions across genomes."""
+    if scm_arr.size == 0:
         return FishSetResponse(
             label=req.label,
             color=req.color,
@@ -51,7 +60,6 @@ def _resolve_fish_set(
             genomes=[],
         )
 
-    scm_arr = np.array(scm_idxs, dtype=np.int32)
     universe = state.scm_store.universe
     genome_coverage: dict[str, int] = {}
     genomes: list[FishGenomeCoverage] = []
@@ -110,8 +118,10 @@ def create_fish_set(
 ) -> FishSetResponse:
     if req.label in state.fish_sets:
         raise HTTPException(409, f"FISH set with label {req.label!r} already exists")
-    result = _resolve_fish_set(req, state)
+    scm_arr = _resolve_indices(req.scm_ids, state)
+    result = _resolve_fish_set(req, scm_arr, state)
     state.fish_sets[req.label] = result
+    state.fish_set_indices[req.label] = scm_arr
     return result
 
 
@@ -139,3 +149,49 @@ def delete_fish_set(
     if label not in state.fish_sets:
         raise HTTPException(404, f"FISH set {label!r} not found")
     del state.fish_sets[label]
+    state.fish_set_indices.pop(label, None)
+
+
+@router.post("/fish/density", response_model=FishDensityResponse)
+def fish_density(
+    req: FishDensityRequest,
+    state: AppState = Depends(get_state),
+) -> FishDensityResponse:
+    """Per-genome whole-genome density histograms for FISH sets (exact — every
+    SCM counted), for the multi-colour density preview / FISH-like render.
+
+    For each set and genome, the genome's own SCMs that belong to the set are
+    histogrammed by genome-global offset into ``bins`` bins over
+    ``[0, total_length)``. Nothing is subsampled, so the result is the ground
+    truth the on-screen capped view can be checked against.
+    """
+    labels = req.labels if req.labels is not None else list(state.fish_sets.keys())
+    sets_out: list[FishDensitySet] = []
+    for label in labels:
+        fs = state.fish_sets.get(label)
+        if fs is None:
+            raise HTTPException(404, f"FISH set {label!r} not found")
+        idxs = state.fish_set_indices.get(label)
+        genomes_out: dict[str, list[int]] = {}
+        max_count = 0
+        for genome_id in state.scm_store.genome_ids:
+            gpos = state.scm_store.genome_positions[genome_id]
+            total_len = state.genome_store[genome_id].total_length
+            if idxs is None or idxs.size == 0 or gpos.size == 0 or total_len <= 0:
+                genomes_out[genome_id] = [0] * req.bins
+                continue
+            mask = np.isin(gpos["scm_id_idx"], idxs, assume_unique=True)
+            offsets = gpos["offset"][mask]
+            counts, _ = np.histogram(offsets, bins=req.bins, range=(0, total_len))
+            max_count = max(max_count, int(counts.max(initial=0)))
+            genomes_out[genome_id] = counts.astype(np.int64).tolist()
+        sets_out.append(
+            FishDensitySet(
+                label=label,
+                color=fs.color,
+                scm_count=fs.scm_count,
+                max_count=max_count,
+                genomes=genomes_out,
+            )
+        )
+    return FishDensityResponse(bins=req.bins, sets=sets_out)

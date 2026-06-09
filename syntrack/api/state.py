@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from syntrack.api.schemas import FishSetResponse
     from syntrack.cache import PairCache
     from syntrack.config import Config
@@ -23,3 +25,6 @@ class AppState:
     pair_cache: PairCache
     paint_cache: PairCache
     fish_sets: dict[str, FishSetResponse] = field(default_factory=dict)
+    # Resolved universe indices per FISH set label — the full membership (the
+    # FishSetResponse only carries capped positions). Used by /api/fish/density.
+    fish_set_indices: dict[str, np.ndarray] = field(default_factory=dict)
