@@ -39,6 +39,7 @@
   } from './canvas/draw_highlight'
   import { drawFishSets } from './canvas/draw_fish'
   import { drawFishDensity } from './canvas/draw_fish_density'
+  import { downloadCanvasPng, exportBins, renderFishDensityImage } from './canvas/fish_export'
   import type { AdjacentPair } from './canvas/draw_ribbons'
   import type { AdjacentPairScms } from './canvas/draw_scms'
   import { RibbonRenderer } from './canvas/ribbon_renderer'
@@ -169,6 +170,8 @@
   let fishDensityResult = $state<FishDensityResponse | null>(null)
   let fishDensityLoading = $state(false)
   let fishDensityError = $state<string | null>(null)
+  let fishExporting = $state(false)
+  let savingHighlightSet = $state(false)
   // View saved on entering preview, restored on exit.
   let savedPreviewView: { vp: Viewport; overrides: Map<string, ScopeDelta> } | null = null
 
@@ -1041,6 +1044,51 @@
     void fetchFishDensity()
   })
 
+  /** Export the FISH density as a high-resolution PNG (re-fetched at export
+   *  resolution so the image is crisp, independent of the on-screen width). */
+  async function exportFishPng(): Promise<void> {
+    if (!fishPreview || fishExporting || fishVisible.size === 0) return
+    fishExporting = true
+    fishDensityError = null
+    try {
+      const density = await api.fishDensity(exportBins(), [...fishVisible])
+      const canvas = renderFishDensityImage(density, genomesInOrder, fishVisible)
+      const stamp = new Date().toISOString().slice(0, 10)
+      downloadCanvasPng(canvas, `syntrack_fish_${stamp}.png`)
+    } catch (err) {
+      fishDensityError = err instanceof Error ? err.message : String(err)
+    } finally {
+      fishExporting = false
+    }
+  }
+
+  /** Turn the current highlight selection into a coloured FISH marker set (the
+   *  complete, uncapped SCM set — same source as the export). */
+  async function saveHighlightAsFishSet(): Promise<void> {
+    if (!highlightResult || savingHighlightSet) return
+    const src = highlightResult.source
+    let label = `${src.seq}:${src.start}-${src.end}`
+    for (let n = 2; fishSets.has(label); n++) label = `${src.seq}:${src.start}-${src.end} (${n})`
+    savingHighlightSet = true
+    error = null
+    try {
+      const full = await api.highlight(
+        src.genome_id,
+        `${src.seq}:${src.start}-${src.end}`,
+        { limit: 0 },
+      )
+      const ids = full.source.scm_ids
+      if (ids.length === 0) return
+      const resp = await api.fishCreate(ids, label, nextFishColor())
+      fishSets.set(label, resp)
+      fishVisible.add(label)
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+    } finally {
+      savingHighlightSet = false
+    }
+  }
+
   // ----------------------------- Chromosome color picker -------------------
 
   function openColorPicker(seqName: string): void {
@@ -1284,6 +1332,13 @@
   >
     {downloadingScms ? 'Fetching…' : '↓ SCM IDs'}
   </button>
+  <button
+    onclick={saveHighlightAsFishSet}
+    disabled={!highlightResult || highlightResult.source.scm_count === 0 || savingHighlightSet}
+    title="Save the highlighted region as a coloured FISH marker set (complete SCM set). View it in the FISH preview."
+  >
+    {savingHighlightSet ? 'Saving…' : '★ Save as set'}
+  </button>
   <button onclick={resetView} disabled={!allGenomes}>Reset view</button>
 </header>
 
@@ -1338,9 +1393,19 @@
           >
             {fishPreview ? 'Exit preview' : 'FISH preview'}
           </button>
-          <button onclick={() => fishFileInput?.click()} disabled={fishLoading || fishPreview}>
-            {fishLoading ? 'Loading…' : 'Load'}
-          </button>
+          {#if fishPreview}
+            <button
+              onclick={exportFishPng}
+              disabled={fishExporting || fishDensityLoading || fishVisible.size === 0}
+              title="Export the FISH density as a high-resolution PNG."
+            >
+              {fishExporting ? 'Exporting…' : 'Export PNG'}
+            </button>
+          {:else}
+            <button onclick={() => fishFileInput?.click()} disabled={fishLoading}>
+              {fishLoading ? 'Loading…' : 'Load'}
+            </button>
+          {/if}
         </div>
         <input
           bind:this={fishFileInput}

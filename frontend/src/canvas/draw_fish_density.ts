@@ -15,11 +15,77 @@ import { type Ctx2D, DEFAULT_LAYOUT, type TrackLayout, trackY } from './draw_tra
 const BAR_BG = '#0a0a0a'
 const SEP = 'rgba(255, 255, 255, 0.18)'
 
+export type ActiveSet = {
+  rgb: [number, number, number]
+  inv: number
+  genomes: Record<string, number[]>
+}
+
 function hexToRgb(hex: string): [number, number, number] {
   const m = /^#([0-9a-f]{6})$/i.exec(hex)
   if (!m) return [255, 255, 255]
   const n = Number.parseInt(m[1], 16)
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+/** Precompute per-set RGB + inverse normalizer for the visible sets. Per-set
+ *  normalization means each set spans its own full brightness range, so faint
+ *  sets stay visible next to dense ones. */
+export function buildActiveSets(sets: FishDensitySet[], visibleLabels: Set<string>): ActiveSet[] {
+  return sets
+    .filter((s) => visibleLabels.has(s.label) && s.max_count > 0)
+    .map((s) => ({ rgb: hexToRgb(s.color), inv: 1 / s.max_count, genomes: s.genomes }))
+}
+
+/** Render one genome's density bar (dark background + additive multi-colour
+ *  composite + chromosome separators) into the rectangle (x0, y, barWidth,
+ *  barHeight). Shared by the on-screen render and the PNG export. */
+export function drawGenomeBar(
+  ctx: Ctx2D,
+  active: ActiveSet[],
+  genome: Genome,
+  bins: number,
+  x0: number,
+  y: number,
+  barWidth: number,
+  barHeight: number,
+): void {
+  ctx.fillStyle = BAR_BG
+  ctx.fillRect(x0, y, barWidth, barHeight)
+  if (bins <= 0) return
+
+  const binW = barWidth / bins
+  const cols = active
+    .map((a) => ({ rgb: a.rgb, inv: a.inv, counts: a.genomes[genome.id] }))
+    .filter((a): a is { rgb: [number, number, number]; inv: number; counts: number[] } =>
+      a.counts !== undefined,
+    )
+  for (let b = 0; b < bins && cols.length > 0; b++) {
+    let r = 0
+    let gg = 0
+    let bl = 0
+    for (const c of cols) {
+      const v = c.counts[b]
+      if (!v) continue
+      // sqrt display gain lifts faint bands while preserving relative order.
+      const intensity = Math.sqrt(v * c.inv)
+      r += c.rgb[0] * intensity
+      gg += c.rgb[1] * intensity
+      bl += c.rgb[2] * intensity
+    }
+    if (r === 0 && gg === 0 && bl === 0) continue
+    ctx.fillStyle = `rgb(${Math.min(255, r) | 0}, ${Math.min(255, gg) | 0}, ${Math.min(255, bl) | 0})`
+    ctx.fillRect(x0 + b * binW, y, Math.max(1, binW), barHeight)
+  }
+
+  // Chromosome separators (whole-genome: x = offset / total_length · barWidth).
+  if (genome.total_length > 0) {
+    ctx.fillStyle = SEP
+    for (const s of genome.sequences) {
+      const x = x0 + Math.round((s.offset / genome.total_length) * barWidth)
+      ctx.fillRect(x, y - 2, 1, barHeight + 4)
+    }
+  }
 }
 
 export function drawFishDensity(
@@ -34,54 +100,17 @@ export function drawFishDensity(
 ): void {
   ctx.clearRect(0, 0, canvasWidth, canvasHeight)
   if (bins <= 0) return
-
-  // Precompute per-set RGB + inverse normalizer (per-set: each set spans its own
-  // full brightness range, so faint sets stay visible next to dense ones).
-  const active = sets
-    .filter((s) => visibleLabels.has(s.label) && s.max_count > 0)
-    .map((s) => ({ rgb: hexToRgb(s.color), inv: 1 / s.max_count, genomes: s.genomes }))
-
-  const binW = canvasWidth / bins
-
+  const active = buildActiveSets(sets, visibleLabels)
   for (let i = 0; i < genomesInOrder.length; i++) {
-    const g = genomesInOrder[i]
-    const y = trackY(i, layout)
-
-    // Dark film background.
-    ctx.fillStyle = BAR_BG
-    ctx.fillRect(0, y, canvasWidth, layout.trackHeight)
-
-    // Composite each set's signal for this genome.
-    const cols = active
-      .map((a) => ({ rgb: a.rgb, inv: a.inv, counts: a.genomes[g.id] }))
-      .filter((a): a is { rgb: [number, number, number]; inv: number; counts: number[] } =>
-        a.counts !== undefined,
-      )
-    for (let b = 0; b < bins && cols.length > 0; b++) {
-      let r = 0
-      let gg = 0
-      let bl = 0
-      for (const c of cols) {
-        const v = c.counts[b]
-        if (!v) continue
-        // sqrt display gain lifts faint bands while preserving relative order.
-        const intensity = Math.sqrt(v * c.inv)
-        r += c.rgb[0] * intensity
-        gg += c.rgb[1] * intensity
-        bl += c.rgb[2] * intensity
-      }
-      if (r === 0 && gg === 0 && bl === 0) continue
-      ctx.fillStyle = `rgb(${Math.min(255, r) | 0}, ${Math.min(255, gg) | 0}, ${Math.min(255, bl) | 0})`
-      ctx.fillRect(b * binW, y, Math.max(1, binW), layout.trackHeight)
-    }
-
-    // Chromosome separators (whole-genome: x = offset / total_length · width).
-    if (g.total_length > 0) {
-      ctx.fillStyle = SEP
-      for (const s of g.sequences) {
-        const x = Math.round((s.offset / g.total_length) * canvasWidth)
-        ctx.fillRect(x, y - 2, 1, layout.trackHeight + 4)
-      }
-    }
+    drawGenomeBar(
+      ctx,
+      active,
+      genomesInOrder[i],
+      bins,
+      0,
+      trackY(i, layout),
+      canvasWidth,
+      layout.trackHeight,
+    )
   }
 }
