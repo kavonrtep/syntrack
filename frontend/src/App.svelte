@@ -152,6 +152,8 @@
   let highlightSelection = $state<HighlightSource | null>(null)
   let highlightResult = $state<HighlightResponse | null>(null)
   let highlightDragging = $state(false)
+  // True while the export re-fetches the full (uncapped) SCM set for download.
+  let downloadingScms = $state(false)
 
   // FISH marker sets — keyed by label.
   const fishSets = new SvelteMap<string, FishSetResponse>()
@@ -553,20 +555,15 @@
     return visibleIds.has(id)
   }
 
-  // Sidebar list: visible genomes in their current display order, then
-  // hidden genomes in their fullOrder position — so drag-reorder and
-  // uncheck/re-check both behave intuitively.
+  // Sidebar list: every genome in its fullOrder position, visible or hidden.
+  // Unchecking a genome leaves its row exactly where it is (just dimmed) so the
+  // user keeps the original position in view; re-checking it doesn't move it.
   let sidebarGenomes = $derived.by<Genome[]>(() => {
     if (!allGenomes) return []
     const byId = new Map(allGenomes.map((g) => [g.id, g]))
-    const visible = order
+    return fullOrder
       .map((id) => byId.get(id))
       .filter((g): g is Genome => g !== undefined)
-    const hidden = fullOrder
-      .filter((id) => !visibleIds.has(id))
-      .map((id) => byId.get(id))
-      .filter((g): g is Genome => g !== undefined)
-    return [...visible, ...hidden]
   })
 
   function toggleVisible(id: string) {
@@ -832,9 +829,28 @@
     highlightDragging = false
   }
 
-  function downloadHighlightScmIds(): void {
-    if (!highlightResult || !allGenomes) return
-    const src = highlightResult.source
+  async function downloadHighlightScmIds(): Promise<void> {
+    if (!highlightResult || !allGenomes || downloadingScms) return
+    const region = highlightResult.source
+    // The on-screen highlight is capped for rendering, but a FISH probe set
+    // must be complete — re-fetch the region uncapped (limit=0) so the export
+    // contains every SCM and an accurate cross-genome presence matrix.
+    downloadingScms = true
+    let full: HighlightResponse
+    try {
+      full = await api.highlight(
+        region.genome_id,
+        `${region.seq}:${region.start}-${region.end}`,
+        { limit: 0 },
+      )
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+      return
+    } finally {
+      downloadingScms = false
+    }
+
+    const src = full.source
     const ids = src.scm_ids
     if (ids.length === 0) return
 
@@ -843,7 +859,7 @@
     // their positions list.
     const presence = new Map<string, Set<string>>()
     for (const id of ids) presence.set(id, new Set([src.genome_id]))
-    for (const target of highlightResult.targets) {
+    for (const target of full.targets) {
       for (const pos of target.positions) {
         presence.get(pos.scm_id)?.add(target.genome_id)
       }
@@ -1183,10 +1199,10 @@
   </label>
   <button
     onclick={downloadHighlightScmIds}
-    disabled={!highlightResult || highlightResult.source.scm_count === 0}
-    title="Download a TSV of the highlighted SCMs: scm_id, present_in (genome count), and one 0/1 presence column per loaded genome."
+    disabled={!highlightResult || highlightResult.source.scm_count === 0 || downloadingScms}
+    title="Download a TSV of ALL highlighted SCMs (complete set, not the on-screen cap): scm_id, present_in (genome count), and one 0/1 presence column per loaded genome."
   >
-    ↓ SCM IDs
+    {downloadingScms ? 'Fetching…' : '↓ SCM IDs'}
   </button>
   <button onclick={resetView} disabled={!allGenomes}>Reset view</button>
 </header>

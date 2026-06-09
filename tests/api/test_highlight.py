@@ -140,3 +140,23 @@ def test_highlight_truncation_subsamples_uniformly(client: TestClient) -> None:
     emitted = {p["scm_id"] for p in b["positions"]}
     # The defining property: the last (highest-offset) match survives.
     assert "OG08" in emitted
+
+
+def test_highlight_limit_zero_returns_complete_set(client: TestClient) -> None:
+    """limit=0 means unlimited — used by the SCM-ID export, where completeness
+    is required for designing FISH probe sets. Every source SCM and every target
+    position must be present, with truncated=False."""
+    body = client.get(
+        "/api/highlight",
+        params={"genome_id": "A", "region": "chr1:0-2000", "limit": 0},
+    ).json()
+
+    src = body["source"]
+    assert src["scm_count"] == 10
+    assert src["truncated"] is False
+    assert set(src["scm_ids"]) == {f"OG{i:02d}" for i in range(1, 11)}
+
+    b = _target(body, "B")
+    assert b["scm_count"] == 8
+    assert b["truncated"] is False
+    assert {p["scm_id"] for p in b["positions"]} == {f"OG{i:02d}" for i in range(1, 9)}

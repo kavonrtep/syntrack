@@ -112,10 +112,15 @@ export const api = {
     })
   },
 
-  highlight: (genomeId: string, region: string, signal?: AbortSignal) =>
+  highlight: (
+    genomeId: string,
+    region: string,
+    opts: { limit?: number } = {},
+    signal?: AbortSignal,
+  ) =>
     request<HighlightResponse>(
       '/highlight',
-      { genome_id: genomeId, region },
+      { genome_id: genomeId, region, ...opts },
       { signal },
     ),
 
