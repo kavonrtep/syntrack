@@ -12,6 +12,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 
 from syntrack.api.deps import get_state
+from syntrack.api.sampling import subsample_indices
 from syntrack.api.schemas import (
     FishDensityRequest,
     FishDensityResponse,
@@ -48,9 +49,16 @@ def _resolve_fish_set(
     req: FishSetRequest,
     scm_arr: np.ndarray,
     state: AppState,
-    limit: int = 500,
+    limit: int = 5000,
 ) -> FishSetResponse:
-    """Resolve a FISH set (given its universe-index array) to positions across genomes."""
+    """Resolve a FISH set (given its universe-index array) to positions across genomes.
+
+    The per-genome ``positions`` feed the on-screen FISH overlay (tick marks).
+    They're capped at ``limit`` but **uniformly subsampled** across each genome's
+    offset-sorted matches — the same as /highlight — so the overlay spans the
+    full karyotype rather than clustering at the left edge, and a saved set
+    renders equivalently to the live region highlight it came from.
+    """
     if scm_arr.size == 0:
         return FishSetResponse(
             label=req.label,
@@ -81,7 +89,7 @@ def _resolve_fish_set(
         genome = state.genome_store[genome_id]
         total_count = int(matching.size)
         truncated = limit > 0 and total_count > limit
-        to_emit = matching[:limit] if truncated else matching
+        to_emit = matching[subsample_indices(total_count, limit)]
         positions = [
             FishPositionSchema(
                 scm_id=universe[int(row["scm_id_idx"])],

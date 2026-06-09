@@ -10,6 +10,9 @@ Universe: OG01..OG14 (14 SCMs).
 
 from fastapi.testclient import TestClient
 
+from syntrack.api.routes_fish import _resolve_fish_set, _resolve_indices
+from syntrack.api.schemas import FishSetRequest
+
 
 def test_create_fish_set(client: TestClient) -> None:
     resp = client.post(
@@ -211,3 +214,21 @@ def test_fish_density_dropped_after_delete(client: TestClient) -> None:
     assert client.delete("/api/fish/tmp").status_code == 204
     # Indices were removed too -> density no longer knows the label.
     assert client.post("/api/fish/density", json={"bins": 5, "labels": ["tmp"]}).status_code == 404
+
+
+def test_fish_overlay_positions_subsample_not_head_truncate(app_state) -> None:  # type: ignore[no-untyped-def]
+    """The per-genome overlay positions must be uniformly subsampled across the
+    karyotype, not head-truncated to the leftmost (lowest-offset) SCMs — so a
+    saved set renders like the live region highlight it came from."""
+    # A has OG01..OG10 at increasing offsets 100..1000.
+    req = FishSetRequest(scm_ids=[f"OG{i:02d}" for i in range(1, 11)], label="big", color="#FF0000")
+    scm_arr = _resolve_indices(req.scm_ids, app_state)
+    resp = _resolve_fish_set(req, scm_arr, app_state, limit=3)
+
+    a = next(g for g in resp.genomes if g.genome_id == "A")
+    assert a.scm_count == 10  # full count reported
+    assert a.truncated is True
+    assert len(a.positions) <= 3
+    ids = {p.scm_id for p in a.positions}
+    # Head truncation would yield OG01..OG03; subsampling keeps the last (OG10).
+    assert "OG10" in ids

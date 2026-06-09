@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from syntrack.api.deps import get_state
 from syntrack.api.regions import parse_region
+from syntrack.api.sampling import subsample_indices
 from syntrack.api.schemas import (
     HighlightPositionSchema,
     HighlightResponse,
@@ -28,21 +29,6 @@ router = APIRouter()
 
 def _strand_str(strand: int) -> str:
     return "+" if strand > 0 else "-"
-
-
-def _subsample_indices(n: int, limit: int) -> np.ndarray:
-    """Return up to ``limit`` evenly-spaced indices into ``[0, n)``, in order.
-
-    The caller's arrays are sorted by genome-global offset, so an even sample of
-    indices is an even sample in *space*. This is what keeps a capped highlight
-    faithful: head truncation (``arr[:limit]``) would cluster every surviving
-    tick at the lowest offsets, collapsing the cross-genome signal into a sliver
-    at the start of each chromosome. Uniform sampling instead preserves the full
-    span of the corresponding region.
-    """
-    if limit <= 0 or n <= limit:
-        return np.arange(n)
-    return np.unique(np.linspace(0, n - 1, limit).round().astype(np.int64))
 
 
 @router.get("/highlight", response_model=HighlightResponse)
@@ -75,7 +61,7 @@ def get_highlight(
     universe = state.scm_store.universe
     source_total = int(scm_idxs.size)
     source_truncated = limit > 0 and source_total > limit
-    source_ids_to_emit = scm_idxs[_subsample_indices(source_total, limit)]
+    source_ids_to_emit = scm_idxs[subsample_indices(source_total, limit)]
     source_scm_ids = [universe[int(i)] for i in source_ids_to_emit]
     source_schema = HighlightSourceSchema(
         genome_id=genome_id,
@@ -104,7 +90,7 @@ def get_highlight(
         target_genome = state.genome_store[target_id]
         total_count = int(matching.size)
         truncated = limit > 0 and total_count > limit
-        to_emit = matching[_subsample_indices(total_count, limit)]
+        to_emit = matching[subsample_indices(total_count, limit)]
         positions = [
             HighlightPositionSchema(
                 scm_id=universe[int(row["scm_id_idx"])],
