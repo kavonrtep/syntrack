@@ -6,6 +6,7 @@
   import type {
     BlocksResponse,
     ConfigResponse,
+    FishDensityResponse,
     FishSetResponse,
     Genome,
     HighlightResponse,
@@ -37,6 +38,7 @@
     type HighlightSource,
   } from './canvas/draw_highlight'
   import { drawFishSets } from './canvas/draw_fish'
+  import { drawFishDensity } from './canvas/draw_fish_density'
   import type { AdjacentPair } from './canvas/draw_ribbons'
   import type { AdjacentPairScms } from './canvas/draw_scms'
   import { RibbonRenderer } from './canvas/ribbon_renderer'
@@ -159,6 +161,16 @@
   const fishSets = new SvelteMap<string, FishSetResponse>()
   const fishVisible = new SvelteSet<string>()
   let fishLoading = $state(false)
+
+  // FISH density preview: a frozen, whole-genome, multi-colour density render
+  // of the visible marker sets (a synthetic FISH karyotype). While on, pan/zoom
+  // is disabled and connections are hidden.
+  let fishPreview = $state(false)
+  let fishDensityResult = $state<FishDensityResponse | null>(null)
+  let fishDensityLoading = $state(false)
+  let fishDensityError = $state<string | null>(null)
+  // View saved on entering preview, restored on exit.
+  let savedPreviewView: { vp: Viewport; overrides: Map<string, ScopeDelta> } | null = null
 
   // Small rotating palette for auto-assigning FISH set colors.
   const FISH_PALETTE = [
@@ -454,6 +466,19 @@
     void globalViewport
     const ctx = sizeAndContext(trackCanvas, canvasWidth, effectiveCanvasHeight)
     if (!ctx) return
+    if (fishPreview) {
+      // Frozen, whole-genome multi-colour FISH density in place of the tracks.
+      drawFishDensity(
+        ctx,
+        fishDensityResult?.sets ?? [],
+        fishVisible,
+        genomesInOrder,
+        fishDensityResult?.bins ?? 0,
+        canvasWidth,
+        effectiveCanvasHeight,
+      )
+      return
+    }
     drawTracks(
       ctx,
       genomesInOrder,
@@ -515,7 +540,8 @@
   // changes. Light payload — heavy data is cached in the renderer/worker.
   $effect(() => {
     const r = ribbonRenderer
-    if (!r || canvasWidth < 2 || effectiveCanvasHeight < 2) return
+    // Connections are hidden during FISH preview (and the layer is CSS-hidden).
+    if (!r || fishPreview || canvasWidth < 2 || effectiveCanvasHeight < 2) return
     void viewportOverrides.size
     void globalViewport
     const viewports: Record<string, Viewport> = {}
@@ -538,6 +564,8 @@
     const ctx = sizeAndContext(overlayCanvas, canvasWidth, effectiveCanvasHeight)
     if (!ctx) return
     ctx.clearRect(0, 0, canvasWidth, effectiveCanvasHeight)
+    // FISH preview owns the whole view; no overlay ticks/highlight on top.
+    if (fishPreview) return
     // FISH ticks first (underneath highlight).
     drawFishSets(ctx, fishSets, fishVisible, genomesInOrder, viewportFn, canvasWidth, effectiveCanvasHeight)
     // Transient highlight on top.
@@ -604,7 +632,7 @@
   let pendingWheelFrame: number | null = null
 
   function onWheel(e: WheelEvent) {
-    if (!trackCanvas) return
+    if (!trackCanvas || fishPreview) return
     e.preventDefault()
     const rect = trackCanvas.getBoundingClientRect()
     const cursorFraction = (e.clientX - rect.left) / rect.width
@@ -674,7 +702,7 @@
   }
 
   function onPointerDown(e: PointerEvent) {
-    if (e.button !== 0) return
+    if (e.button !== 0 || fishPreview) return
     // Ctrl / Meta + click-drag → start a highlight region selection.
     if (e.ctrlKey || e.metaKey) {
       const click = resolveTrackClick(e.clientX, e.clientY)
@@ -961,6 +989,58 @@
     }
   }
 
+  // ----------------------------- FISH density preview ----------------------
+
+  /** Fetch density for the currently-visible sets at ~canvas-width resolution. */
+  async function fetchFishDensity(): Promise<void> {
+    const labels = [...fishVisible]
+    if (labels.length === 0) {
+      fishDensityResult = null
+      return
+    }
+    const bins = Math.max(1, Math.min(20_000, Math.round(canvasWidth)))
+    fishDensityLoading = true
+    fishDensityError = null
+    try {
+      fishDensityResult = await api.fishDensity(bins, labels)
+    } catch (err) {
+      fishDensityError = err instanceof Error ? err.message : String(err)
+      fishDensityResult = null
+    } finally {
+      fishDensityLoading = false
+    }
+  }
+
+  function toggleFishPreview(): void {
+    if (fishPreview) {
+      // Exit: restore the saved view.
+      fishPreview = false
+      fishDensityResult = null
+      fishDensityError = null
+      if (savedPreviewView) {
+        globalViewport = savedPreviewView.vp
+        viewportOverrides.clear()
+        for (const [k, v] of savedPreviewView.overrides) viewportOverrides.set(k, v)
+        savedPreviewView = null
+      }
+      return
+    }
+    // Enter: snapshot the view, reset to whole-genome, freeze. The effect below
+    // fetches the density (it fires when fishPreview flips on).
+    savedPreviewView = { vp: globalViewport, overrides: new Map(viewportOverrides) }
+    globalViewport = DEFAULT_VIEWPORT
+    viewportOverrides.clear()
+    fishPreview = true
+  }
+
+  // While in preview, (re)fetch when entering or when the visible set changes.
+  $effect(() => {
+    const labels = [...fishVisible] // read membership so this tracks changes
+    if (!fishPreview) return
+    void labels
+    void fetchFishDensity()
+  })
+
   // ----------------------------- Chromosome color picker -------------------
 
   function openColorPicker(seqName: string): void {
@@ -997,7 +1077,7 @@
   let aligning = $state(false)
 
   async function onDoubleClick(e: MouseEvent) {
-    if (!trackCanvas || aligning) return
+    if (!trackCanvas || aligning || fishPreview) return
     const rect = trackCanvas.getBoundingClientRect()
     const cx = e.clientX - rect.left
     const cy = e.clientY - rect.top
@@ -1250,7 +1330,15 @@
       <div class="sidebar-head fish-head">
         <span class="sidebar-title">Marker Sets</span>
         <div class="sidebar-actions">
-          <button onclick={() => fishFileInput?.click()} disabled={fishLoading}>
+          <button
+            class:active={fishPreview}
+            onclick={toggleFishPreview}
+            disabled={fishSets.size === 0}
+            title="FISH preview: a frozen, whole-genome multi-colour density render of the visible marker sets (every SCM counted). Pan/zoom is disabled while on."
+          >
+            {fishPreview ? 'Exit preview' : 'FISH preview'}
+          </button>
+          <button onclick={() => fishFileInput?.click()} disabled={fishLoading || fishPreview}>
             {fishLoading ? 'Loading…' : 'Load'}
           </button>
         </div>
@@ -1262,6 +1350,14 @@
           onchange={onFishFileSelected}
         />
       </div>
+      {#if fishPreview}
+        <p class="fish-preview-note">
+          {#if fishDensityLoading}Rendering density…
+          {:else if fishDensityError}Error: {fishDensityError}
+          {:else if fishVisible.size === 0}Enable a marker set to see its signal.
+          {:else}Frozen whole-genome FISH density · pan/zoom disabled{/if}
+        </p>
+      {/if}
       {#each [...fishSets] as [label, fs] (label)}
         <label class="fish-toggle">
           <input
@@ -1298,9 +1394,9 @@
         class="canvas-stack"
         style:height={`${Math.max(canvasHeight, canvasContentHeight)}px`}
       >
-        <canvas bind:this={ribbonCanvas} class="layer ribbons"></canvas>
+        <canvas bind:this={ribbonCanvas} class="layer ribbons" class:layer-hidden={fishPreview}></canvas>
         <canvas bind:this={trackCanvas} class="layer tracks"></canvas>
-        <canvas bind:this={overlayCanvas} class="layer overlay"></canvas>
+        <canvas bind:this={overlayCanvas} class="layer overlay" class:layer-hidden={fishPreview}></canvas>
 
         <!-- Track-handle overlay: one drag-handle strip per visible genome,
              sitting directly above its bar. Pointer-events isolated to the
@@ -1505,6 +1601,21 @@
     border-top: 1px solid #333;
   }
 
+  .sidebar-actions button.active {
+    background: #ffdc32;
+    color: #1a1a1a;
+    border-color: #ffdc32;
+  }
+
+  .fish-preview-note {
+    margin: 0;
+    padding: 0.35em 0.8em;
+    font-size: 0.75em;
+    color: #bbb;
+    background: #1d1d1d;
+    border-bottom: 1px solid #2a2a2a;
+  }
+
   .fish-toggle {
     display: flex;
     align-items: center;
@@ -1601,6 +1712,10 @@
     width: 100%;
     height: 100%;
     display: block;
+  }
+
+  .layer-hidden {
+    display: none;
   }
 
   .ribbons {

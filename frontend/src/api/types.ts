@@ -183,6 +183,21 @@ export type FishSetResponse = FishSetSummary & {
 
 export type FishListResponse = { sets: FishSetSummary[] }
 
+export type FishDensitySet = {
+  label: string
+  color: string
+  scm_count: number
+  /** Largest single-bin count across all genomes — for intensity normalization. */
+  max_count: number
+  /** genome_id -> count per bin (length == bins), over [0, total_length). */
+  genomes: Record<string, number[]>
+}
+
+export type FishDensityResponse = {
+  bins: number
+  sets: FishDensitySet[]
+}
+
 // ------------------------------ /api/config --------------------------------
 
 export type BlockDetection = { max_gap: number; min_block_size: number }

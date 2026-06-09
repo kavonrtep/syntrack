@@ -4,6 +4,7 @@ import type {
   AlignmentResponse,
   BlocksResponse,
   ConfigResponse,
+  FishDensityResponse,
   FishListResponse,
   FishSetResponse,
   GenomesResponse,
@@ -138,4 +139,12 @@ export const api = {
 
   fishDelete: (label: string) =>
     request<void>(`/fish/${encodeURIComponent(label)}`, {}, { method: 'DELETE' }),
+
+  fishDensity: (bins: number, labels?: string[], signal?: AbortSignal) =>
+    request<FishDensityResponse>('/fish/density', {}, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(labels ? { bins, labels } : { bins }),
+      signal,
+    }),
 }
