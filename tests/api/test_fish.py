@@ -232,3 +232,25 @@ def test_fish_overlay_positions_subsample_not_head_truncate(app_state) -> None: 
     ids = {p.scm_id for p in a.positions}
     # Head truncation would yield OG01..OG03; subsampling keeps the last (OG10).
     assert "OG10" in ids
+
+
+# ------------------------------ /api/fish/{label}/scms ---------------------
+
+
+def test_fish_set_scms_export(client: TestClient) -> None:
+    # OG01 is in A,B (not C); OG05 is in A,B,C.
+    client.post("/api/fish", json={"scm_ids": ["OG01", "OG05"], "label": "x", "color": "#FF0000"})
+    body = client.get("/api/fish/x/scms").json()
+    assert body["label"] == "x"
+    ids = body["scm_ids"]
+    assert set(ids) == {"OG01", "OG05"}
+    i01, i05 = ids.index("OG01"), ids.index("OG05")
+    p = body["presence"]
+    assert p["A"][i01] == "1" and p["B"][i01] == "1" and p["C"][i01] == "0"
+    assert p["A"][i05] == "1" and p["B"][i05] == "1" and p["C"][i05] == "1"
+    # Presence strings are aligned to scm_ids length.
+    assert all(len(p[g]) == len(ids) for g in ("A", "B", "C"))
+
+
+def test_fish_set_scms_unknown_404(client: TestClient) -> None:
+    assert client.get("/api/fish/nope/scms").status_code == 404

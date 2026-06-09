@@ -7,6 +7,7 @@ import type {
   FishDensityResponse,
   FishListResponse,
   FishSetResponse,
+  FishSetScmsResponse,
   GenomesResponse,
   HighlightResponse,
   PairsResponse,
@@ -147,4 +148,7 @@ export const api = {
       body: JSON.stringify(labels ? { bins, labels } : { bins }),
       signal,
     }),
+
+  fishScms: (label: string, signal?: AbortSignal) =>
+    request<FishSetScmsResponse>(`/fish/${encodeURIComponent(label)}/scms`, {}, { signal }),
 }

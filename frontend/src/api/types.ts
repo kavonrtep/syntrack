@@ -198,6 +198,13 @@ export type FishDensityResponse = {
   sets: FishDensitySet[]
 }
 
+export type FishSetScmsResponse = {
+  label: string
+  scm_ids: string[]
+  /** genome_id -> '0'/'1' string aligned to scm_ids (1 = present in that genome). */
+  presence: Record<string, string>
+}
+
 // ------------------------------ /api/config --------------------------------
 
 export type BlockDetection = { max_gap: number; min_block_size: number }

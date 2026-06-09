@@ -311,3 +311,18 @@ class FishDensitySet(_Schema):
 class FishDensityResponse(_Schema):
     bins: int
     sets: list[FishDensitySet]
+
+
+# ------------------------------ /api/fish/{label}/scms ---------------------
+
+
+class FishSetScmsResponse(_Schema):
+    """Complete SCM membership of a stored FISH set, for exporting it to file.
+
+    ``presence[genome_id]`` is a ``'0'``/``'1'`` string aligned to ``scm_ids``
+    (1 = that SCM is present in that genome). Compact enough for large sets.
+    """
+
+    label: str
+    scm_ids: list[str]
+    presence: dict[str, str]

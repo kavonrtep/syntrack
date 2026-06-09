@@ -23,6 +23,7 @@ from syntrack.api.schemas import (
     FishSetRequest,
     FishSetResponse,
     FishSetSchema,
+    FishSetScmsResponse,
 )
 from syntrack.api.state import AppState
 
@@ -203,3 +204,30 @@ def fish_density(
             )
         )
     return FishDensityResponse(bins=req.bins, sets=sets_out)
+
+
+@router.get("/fish/{label}/scms", response_model=FishSetScmsResponse)
+def fish_set_scms(
+    label: str,
+    state: AppState = Depends(get_state),
+) -> FishSetScmsResponse:
+    """Return the FISH set's COMPLETE SCM membership + per-genome presence, for
+    saving the set to file. Uses the full stored index set (not the capped
+    overlay positions), so the export is complete regardless of set size."""
+    if label not in state.fish_sets:
+        raise HTTPException(404, f"FISH set {label!r} not found")
+    idxs = state.fish_set_indices.get(label)
+    universe = state.scm_store.universe
+    if idxs is None or idxs.size == 0:
+        return FishSetScmsResponse(label=label, scm_ids=[], presence={})
+
+    scm_ids = [universe[int(i)] for i in idxs]
+    presence: dict[str, str] = {}
+    for genome_id in state.scm_store.genome_ids:
+        gpos = state.scm_store.genome_positions[genome_id]
+        if gpos.size == 0:
+            presence[genome_id] = "0" * int(idxs.size)
+            continue
+        mask = np.isin(idxs, gpos["scm_id_idx"], assume_unique=True)
+        presence[genome_id] = "".join(np.where(mask, "1", "0"))
+    return FishSetScmsResponse(label=label, scm_ids=scm_ids, presence=presence)

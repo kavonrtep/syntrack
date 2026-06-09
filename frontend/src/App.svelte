@@ -44,6 +44,12 @@
   import type { AdjacentPairScms } from './canvas/draw_scms'
   import { RibbonRenderer } from './canvas/ribbon_renderer'
   import type { RibbonData, RibbonView } from './canvas/ribbon_protocol'
+  import {
+    buildPresenceTsv,
+    downloadTextFile,
+    presenceFromBitstrings,
+    safeFilenamePart,
+  } from './scm_export'
   import { fmtBp } from './canvas/format'
   import { genomeIndexAt } from './canvas/hit_test'
   import { lodMode } from './canvas/lod'
@@ -162,6 +168,8 @@
   const fishSets = new SvelteMap<string, FishSetResponse>()
   const fishVisible = new SvelteSet<string>()
   let fishLoading = $state(false)
+  // Label of the set currently being saved to file (null = none).
+  let fishFileSaving = $state<string | null>(null)
 
   // FISH density preview: a frozen, whole-genome, multi-colour density render
   // of the visible marker sets (a synthetic FISH karyotype). While on, pan/zoom
@@ -896,32 +904,31 @@
       }
     }
 
-    // Columns: scm_id, present_in, <one per loaded genome in server order>.
-    // Using allGenomes (server order) keeps the column layout stable across
+    // allGenomes (server order) keeps the column layout stable across
     // reorder/visibility changes.
     const genomeIds = allGenomes.map((g) => g.id)
-    const header = ['scm_id', 'present_in', ...genomeIds].join('\t')
-    const lines = [header]
-    for (const scmId of ids) {
-      const set = presence.get(scmId) ?? new Set<string>()
-      const cells: string[] = [
-        scmId,
-        String(set.size),
-        ...genomeIds.map((gid) => (set.has(gid) ? '1' : '0')),
-      ]
-      lines.push(cells.join('\t'))
+    const tsv = buildPresenceTsv(ids, presence, genomeIds)
+    const safeSeq = safeFilenamePart(src.seq)
+    downloadTextFile(tsv, `syntrack_${src.genome_id}_${safeSeq}_${src.start}-${src.end}_scm_ids.tsv`)
+  }
+
+  /** Save a stored marker set's COMPLETE SCM IDs to file (same presence-matrix
+   *  TSV as the highlight export). Pulls full membership from the backend. */
+  async function downloadFishSetScms(label: string): Promise<void> {
+    if (!allGenomes || fishFileSaving) return
+    fishFileSaving = label
+    try {
+      const resp = await api.fishScms(label)
+      if (resp.scm_ids.length === 0) return
+      const genomeIds = allGenomes.map((g) => g.id)
+      const presence = presenceFromBitstrings(resp.scm_ids, resp.presence)
+      const tsv = buildPresenceTsv(resp.scm_ids, presence, genomeIds)
+      downloadTextFile(tsv, `syntrack_fishset_${safeFilenamePart(label)}_scm_ids.tsv`)
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+    } finally {
+      fishFileSaving = null
     }
-    const text = lines.join('\n') + '\n'
-    const blob = new Blob([text], { type: 'text/tab-separated-values;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    const safeSeq = src.seq.replace(/[^A-Za-z0-9._-]/g, '_')
-    a.download = `syntrack_${src.genome_id}_${safeSeq}_${src.start}-${src.end}_scm_ids.tsv`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
   }
 
   // ----------------------------- FISH marker sets --------------------------
@@ -1434,6 +1441,12 @@
           <span class="toggle-label">{label}</span>
           <span class="toggle-meta">{fs.scm_count.toLocaleString()}</span>
           <button
+            class="fish-save"
+            title="Save this set's SCM IDs to file (complete set)"
+            disabled={fishFileSaving !== null}
+            onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); downloadFishSetScms(label) }}
+          >{fishFileSaving === label ? '…' : '↓'}</button>
+          <button
             class="fish-delete"
             title="Remove marker set"
             onclick={(e: MouseEvent) => { e.stopPropagation(); deleteFishSet(label) }}
@@ -1708,8 +1721,27 @@
     flex-shrink: 0;
   }
 
-  .fish-delete {
+  .fish-save {
     margin-left: auto;
+    background: none;
+    border: none;
+    color: #777;
+    font-size: 0.95em;
+    cursor: pointer;
+    padding: 0 0.3em;
+    line-height: 1;
+  }
+
+  .fish-save:hover:not(:disabled) {
+    color: #6cf;
+  }
+
+  .fish-save:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  .fish-delete {
     background: none;
     border: none;
     color: #777;
