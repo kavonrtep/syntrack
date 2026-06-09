@@ -100,10 +100,11 @@ Without them the browser downloads but dies with
 **must** come from the image — they can't be `apt install`ed in-session.
 
 **Per-project, one-time** (browser binary → `~/.cache/ms-playwright`, which is
-in the persistent sandbox home, so it survives container rebuilds):
+in the persistent sandbox home, so it survives container rebuilds). Both deps
+are already in `frontend/package.json`; this just (re)installs the binary:
 ```bash
 cd frontend
-npm install -D playwright          # or @playwright/test for the runner
+npm install                        # pulls @playwright/test + playwright
 npx playwright install chromium    # ~115 MB, headless-shell
 ```
 
@@ -112,10 +113,16 @@ npx playwright install chromium    # ~115 MB, headless-shell
 node -e "const {chromium}=require('playwright');(async()=>{const b=await chromium.launch();const p=await b.newPage();await p.setContent('<h1>ok</h1>');await p.screenshot({path:'/tmp/ok.png'});await b.close();console.log('OK')})()"
 ```
 
-The screenshot smoke harness (build → serve `dist` + `example_data` → drive a
-few flows → save PNGs at key states) lands as a follow-up once the container is
-rebuilt. Scope it to **chromium headless-shell only** (no firefox/webkit) to
-keep things lean.
+**Screenshot smoke harness** — landed. `playwright.config.ts` builds `dist`,
+serves it + `example_data` through the syntrack server (waiting on `/healthz`),
+and `tests/e2e/screenshots.spec.ts` drives a few flows, saving PNGs to
+`tests/e2e/screenshots/` (gitignored) for direct inspection. Scoped to
+**chromium headless-shell only** (no firefox/webkit). Run it with:
+```bash
+cd frontend && npm run test:e2e
+```
+The PNGs are the point — read them back to eyeball the render. The spec asserts
+DOM state only (the canvas is data-dependent, so it's not a pixel-diff).
 
 ## Conventions
 

@@ -28,6 +28,11 @@ frontend/node_modules/
 frontend/dist/
 frontend/.svelte-kit/
 
+# Playwright e2e (screenshot smoke harness) — generated artifacts
+frontend/test-results/
+frontend/playwright-report/
+frontend/tests/e2e/screenshots/
+
 # Pair cache
 **/cache/*.npz
 **/cache/manifest.json
