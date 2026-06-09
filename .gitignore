@@ -38,3 +38,6 @@ frontend/.svelte-kit/
 
 # pytest-benchmark run data (machine-specific)
 .benchmarks/
+
+# Claude Code: commit shared project settings, ignore personal overrides
+.claude/settings.local.json

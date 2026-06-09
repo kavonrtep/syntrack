@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./dev.sh pytest:*)",
+      "Bash(./dev.sh ruff:*)",
+      "Bash(./dev.sh mypy:*)",
+      "Bash(./dev.sh syntrack:*)",
+      "Bash(npm run check:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run build:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *.py) ./dev.sh ruff check --fix \"$f\" >/dev/null 2>&1; ./dev.sh ruff format \"$f\" >/dev/null 2>&1 ;; esac; true"
+          }
+        ]
+      }
+    ]
+  }
+}
