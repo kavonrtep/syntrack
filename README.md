@@ -21,6 +21,7 @@ Genome synteny visualization tool. Multi-genome view with adjacent-pair connecti
 | Toggle a genome on/off | sidebar checkbox |
 | Vertical alignment | **double-click** a bar — every other genome shifts to match basewise resolution + syntenic position |
 | Highlight region | **Ctrl / Cmd + click-drag** on a bar — shows ticks on every genome that contains a matching SCM |
+| Highlight by coordinates | Type `chr1:1,000,000-2,500,000` (or `chr1:from:to`, `chr1 from to`; 1-based) in the header box — region is on the "Color by" reference genome |
 | Fade reference coloring | "Fade" slider in the header |
 | Download highlighted SCM IDs | ↓ SCM IDs button (TSV: scm_id · present_in · one 0/1 column per genome) |
 | Clear highlight | **Esc**, or Reset view |

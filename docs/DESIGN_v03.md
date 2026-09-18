@@ -910,7 +910,12 @@ FISH overlay (on all tracks, not just adjacent):
 
 **Region selection and highlight (F3):**
 - Click-drag on genome track creates selection.
-- On mouse-up: send to `POST /api/highlight`.
+- Alternatively, a region typed in the header (`seq:from-to`, `seq:from:to`
+  or `seq from to`; 1-based inclusive, `k`/`M` suffixes and thousands
+  separators allowed) selects on the reference ("Color by") genome. Sequence
+  names are matched against that genome's `.fai` names, exact then
+  case-insensitive; no naming convention is assumed.
+- On mouse-up / submit: send to `POST /api/highlight`.
 - Overlay canvas renders:
   - Source region: colored rectangle.
   - Target positions: colored ticks on ALL genome tracks.

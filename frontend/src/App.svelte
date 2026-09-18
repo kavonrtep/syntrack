@@ -53,6 +53,7 @@
   import { fmtBp } from './canvas/format'
   import { genomeIndexAt } from './canvas/hit_test'
   import { lodMode } from './canvas/lod'
+  import { parseRegionInput } from './region_input'
 
   // ----------------------------- State -----------------------------------
 
@@ -161,6 +162,9 @@
   let highlightSelection = $state<HighlightSource | null>(null)
   let highlightResult = $state<HighlightResponse | null>(null)
   let highlightDragging = $state(false)
+  // Typed region input (header): highlights a region of the reference genome.
+  let regionInputText = $state('')
+  let regionInputError = $state<string | null>(null)
   // True while the export re-fetches the full (uncapped) SCM set for download.
   let downloadingScms = $state(false)
 
@@ -827,6 +831,28 @@
     }
   }
 
+  /** Highlight a typed region (``seq:from-to``) on the reference genome —
+   *  the same path as Ctrl-drag, without needing the mouse. */
+  function submitRegionInput(): void {
+    regionInputError = null
+    if (!referenceGenome || fishPreview) return
+    const parsed = parseRegionInput(regionInputText, referenceGenome)
+    if (!parsed.ok) {
+      regionInputError = parsed.error
+      return
+    }
+    highlightSelection = {
+      genomeId: referenceGenome.id,
+      genome: referenceGenome,
+      seq: parsed.region.seq,
+      startBp: parsed.region.startBp,
+      endBp: parsed.region.endBp,
+    }
+    highlightResult = null
+    highlightDragging = false
+    void finalizeHighlight()
+  }
+
   function onPointerUp(e: PointerEvent) {
     if (pendingFrame !== null) {
       cancelAnimationFrame(pendingFrame)
@@ -1315,6 +1341,30 @@
     >
       Reset colors
     </button>
+    <form
+      class="region-ctl"
+      title="Highlight a region of the reference genome (the 'Color by' genome). Formats: seq:from-to, seq:from:to, seq from to. Coordinates are 1-based; k/M suffixes and thousands separators are accepted. Esc clears."
+      onsubmit={(e) => {
+        e.preventDefault()
+        submitRegionInput()
+      }}
+    >
+      <input
+        type="text"
+        placeholder="chr1:1,000,000-2,500,000"
+        bind:value={regionInputText}
+        oninput={() => (regionInputError = null)}
+        disabled={!referenceGenome || fishPreview}
+        class:invalid={regionInputError !== null}
+        spellcheck="false"
+      />
+      <button type="submit" disabled={!referenceGenome || fishPreview || !regionInputText.trim()}>
+        Highlight
+      </button>
+      {#if regionInputError}
+        <span class="region-err" role="alert">{regionInputError}</span>
+      {/if}
+    </form>
   {/if}
   <input
     bind:this={colorPickerEl}
@@ -1324,9 +1374,9 @@
   />
   <span
     class="hint"
-    title="Drag the label above any track to reorder. Shift + wheel/drag over a bar: scope that genome. Double-click a bar: vertical alignment. Ctrl / Cmd + click-drag on a bar: highlight a region (Esc to clear). Click a chromosome on the reference genome to pick its color."
+    title="Drag the label above any track to reorder. Shift + wheel/drag over a bar: scope that genome. Double-click a bar: vertical alignment. Ctrl / Cmd + click-drag on a bar, or type a region for the reference genome: highlight (Esc to clear). Click a chromosome on the reference genome to pick its color."
   >
-    label = reorder · Shift = scope · dbl-click = align · Ctrl-drag = highlight · click ref = color
+    label = reorder · Shift = scope · dbl-click = align · Ctrl-drag / typed region = highlight · click ref = color
   </span>
   <label class="fade-ctl" title="Dim the reference-palette coloring so the highlight overlay stands out. 0 = normal, slide right to fade.">
     Fade
@@ -1558,6 +1608,36 @@
     border-radius: 3px;
     padding: 0.15em 0.3em;
     font-size: 0.95em;
+  }
+
+  .region-ctl {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    font-size: 0.85em;
+  }
+
+  .region-ctl input[type='text'] {
+    background: #333;
+    color: #ddd;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 0.15em 0.4em;
+    font-size: 0.95em;
+    font-family: monospace;
+    width: 15em;
+  }
+
+  .region-ctl input[type='text'].invalid {
+    border-color: #e06060;
+  }
+
+  .region-err {
+    color: #e06060;
+    max-width: 22em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .fade-ctl {
