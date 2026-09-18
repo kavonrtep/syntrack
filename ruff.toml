@@ -16,6 +16,7 @@ select = [
 ]
 ignore = [
     "PLR0913",  # too many args (algorithms have many tunables)
+    "PLR0917",  # too many positional args (same; FastAPI routes take many Query params)
 ]
 
 [lint.per-file-ignores]
