@@ -25,10 +25,14 @@ repos:
       - id: check-case-conflict
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Pin matches the floor in pyproject.toml [project.optional-dependencies]
-    # ruff>=0.7. Bump together when upgrading.
-    rev: v0.7.0
+    # Pin matches pyproject.toml [project.optional-dependencies]
+    # ruff>=0.16,<0.17. Bump together when upgrading.
+    rev: v0.16.8
     hooks:
-      - id: ruff
+      # Python only: v0.16 hooks also format code blocks inside Markdown,
+      # which would rewrite the hand-aligned examples in docs/.
+      - id: ruff-check
         args: [--fix]
+        types_or: [python, pyi]
       - id: ruff-format
+        types_or: [python, pyi]
