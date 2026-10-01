@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildPresenceTsv, presenceFromBitstrings } from './scm_export'
+import { buildPresenceTsv, presenceFromBitstrings, safeFilenamePart } from './scm_export'
 
 describe('scm_export', () => {
   it('builds a presence-matrix TSV with stable genome column order', () => {
@@ -27,5 +27,16 @@ describe('scm_export', () => {
     const tsv = buildPresenceTsv(ids, presence, ['A', 'B', 'C'])
     expect(tsv).toContain('OG01\t2\t1\t1\t0')
     expect(tsv).toContain('OG05\t3\t1\t1\t1')
+  })
+})
+
+describe('safeFilenamePart', () => {
+  it('collapses runs of unsafe characters into one underscore', () => {
+    expect(safeFilenamePart('chr6:0-60550389 JI2202')).toBe('chr6_0-60550389_JI2202')
+    expect(safeFilenamePart('chr6:0-60550389 JI2202 (2)')).toBe('chr6_0-60550389_JI2202_2')
+  })
+  it('keeps safe characters and trims edge underscores', () => {
+    expect(safeFilenamePart('JI1006_2026-01-19.set')).toBe('JI1006_2026-01-19.set')
+    expect(safeFilenamePart(' chr1 ')).toBe('chr1')
   })
 })

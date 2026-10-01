@@ -54,7 +54,9 @@ export function downloadTextFile(
   URL.revokeObjectURL(url)
 }
 
-/** Sanitize a label for use in a filename. */
+/** Sanitize a label for use in a filename. Runs of unsafe characters collapse
+ *  to a single ``_`` and leading / trailing ``_`` are dropped, so a label like
+ *  ``"chr6:0-60550389 JI2202"`` becomes ``"chr6_0-60550389_JI2202"``. */
 export function safeFilenamePart(s: string): string {
-  return s.replace(/[^A-Za-z0-9._-]/g, '_')
+  return s.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '')
 }

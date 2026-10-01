@@ -1100,8 +1100,12 @@
   async function saveHighlightAsFishSet(): Promise<void> {
     if (!highlightResult || savingHighlightSet) return
     const src = highlightResult.source
-    let label = `${src.seq}:${src.start}-${src.end}`
-    for (let n = 2; fishSets.has(label); n++) label = `${src.seq}:${src.start}-${src.end} (${n})`
+    // The genome is part of the label so the set is identifiable in the
+    // Marker Sets menu (two genomes can yield the same coordinates) and so it
+    // carries into the exported filename.
+    const base = `${src.seq}:${src.start}-${src.end} ${src.genome_id}`
+    let label = base
+    for (let n = 2; fishSets.has(label); n++) label = `${base} (${n})`
     savingHighlightSet = true
     error = null
     try {
