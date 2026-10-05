@@ -151,6 +151,9 @@ Rationale:
 - FastAPI serves as a lightweight local API; no external deployment needed.
 - Decoupled frontend/backend allows independent iteration.
 - Single-user local deployment — no auth, no database, file-based data.
+  **Superseded in practice:** instances are deployed shared, with several
+  users on one process, which makes FISH marker-set labels a global namespace.
+  See `docs/design/FISH_SESSION_SCOPE.md` (proposed).
 
 ### 2.2 Component Overview
 
@@ -749,6 +752,22 @@ Response:
 
 Implementation: identical to highlight but with arbitrary SCM set as input
 instead of region-derived set. Both use scm_to_genomes lookup.
+
+**Ownership.** The server store (`AppState.fish_sets`) is a *cache*, not the
+owner of a set. It is emptied by a restart and, where one process serves
+several browsers (§2.1 no longer holds in practice — see
+`docs/design/FISH_SESSION_SCOPE.md`), shared between sessions. The client
+therefore keeps the SCM IDs of every set it created and re-asserts them:
+
+- `replace: true` on the request overwrites an existing label instead of
+  returning 409. Used when the server has forgotten a set, or when another
+  session holds the label.
+- The store is capped (`MAX_FISH_SETS`), evicting the least recently created
+  set; the owning client re-creates it on demand.
+- `POST /api/fish/density` reports unknown labels in `missing` rather than
+  raising 404, so one stale label cannot fail a whole preview. The client
+  re-creates those sets and retries once; a set it cannot restore is dropped
+  from the sidebar.
 
 #### `GET /api/scm/{scm_id}`
 

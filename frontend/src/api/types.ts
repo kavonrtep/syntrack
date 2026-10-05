@@ -196,6 +196,9 @@ export type FishDensitySet = {
 export type FishDensityResponse = {
   bins: number
   sets: FishDensitySet[]
+  /** Requested labels the server does not hold (it restarted, or evicted the
+   *  set). The client re-creates these from the SCM IDs it kept. */
+  missing: string[]
 }
 
 export type FishSetScmsResponse = {

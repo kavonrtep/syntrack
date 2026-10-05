@@ -54,6 +54,13 @@
   import { genomeIndexAt } from './canvas/hit_test'
   import { lodMode } from './canvas/lod'
   import { parseRegionInput } from './region_input'
+  import {
+    createFishSet as createFishSetRecovering,
+    fishDensityRecovering,
+    withFishRetry,
+    type FishApi,
+    type FishStore,
+  } from './fish_recovery'
 
   // ----------------------------- State -----------------------------------
 
@@ -171,6 +178,11 @@
   // FISH marker sets — keyed by label.
   const fishSets = new SvelteMap<string, FishSetResponse>()
   const fishVisible = new SvelteSet<string>()
+  // The SCM IDs behind each set. The server store is a cache we do not own:
+  // one process can be shared by several browser sessions and is emptied by a
+  // restart, so we keep the IDs and re-assert the set when the server has
+  // forgotten it (404) or another session took the label (409).
+  const fishSetIds = new Map<string, string[]>()
   let fishLoading = $state(false)
   // Label of the set currently being saved to file (null = none).
   let fishFileSaving = $state<string | null>(null)
@@ -944,7 +956,7 @@
     if (!allGenomes || fishFileSaving) return
     fishFileSaving = label
     try {
-      const resp = await api.fishScms(label)
+      const resp = await withFishRetry(label, fishStore, fishApi, () => api.fishScms(label))
       if (resp.scm_ids.length === 0) return
       const genomeIds = allGenomes.map((g) => g.id)
       const presence = presenceFromBitstrings(resp.scm_ids, resp.presence)
@@ -986,15 +998,12 @@
       return
     }
     const label = file.name.replace(/\.[^.]+$/, '')
-    // If a set with the same name exists, replace it silently.
-    if (fishSets.has(label)) {
-      await deleteFishSet(label)
-    }
-    const color = nextFishColor()
+    // Re-importing the same file replaces the set, whether this session holds
+    // it or another one on the same server does (createFishSet retries a 409).
+    const color = fishSets.get(label)?.color ?? nextFishColor()
     fishLoading = true
     try {
-      const resp = await api.fishCreate(ids, label, color)
-      fishSets.set(label, resp)
+      const resp = await createFishSet(ids, label, color)
       fishVisible.add(label)
       if (resp.scm_count === 0) {
         error = `"${label}": no matching SCMs found in loaded genomes`
@@ -1007,14 +1016,43 @@
     }
   }
 
+  /** The component's three maps, as the store interface fish_recovery wants. */
+  const fishStore: FishStore = {
+    get: (label) => fishSets.get(label),
+    set: (label, resp) => void fishSets.set(label, resp),
+    ids: (label) => fishSetIds.get(label),
+    drop: (label) => {
+      fishSets.delete(label)
+      fishVisible.delete(label)
+      fishSetIds.delete(label)
+    },
+    report: (message) => {
+      error = message
+    },
+  }
+
+  const fishApi: FishApi = {
+    create: (ids, label, color, replace) => api.fishCreate(ids, label, color, replace),
+    density: (bins, labels, signal) => api.fishDensity(bins, labels, signal),
+  }
+
+  async function createFishSet(
+    ids: string[],
+    label: string,
+    color: string,
+  ): Promise<FishSetResponse> {
+    const resp = await createFishSetRecovering(ids, label, color, fishStore, fishApi)
+    fishSetIds.set(label, ids)
+    return resp
+  }
+
   async function deleteFishSet(label: string): Promise<void> {
     try {
       await api.fishDelete(label)
     } catch {
       // Best-effort server cleanup — remove locally regardless.
     }
-    fishSets.delete(label)
-    fishVisible.delete(label)
+    fishStore.drop(label)
   }
 
   function toggleFishSet(label: string): void {
@@ -1038,7 +1076,7 @@
     fishDensityLoading = true
     fishDensityError = null
     try {
-      fishDensityResult = await api.fishDensity(bins, labels)
+      fishDensityResult = await fishDensityRecovering(bins, labels, fishStore, fishApi)
     } catch (err) {
       fishDensityError = err instanceof Error ? err.message : String(err)
       fishDensityResult = null
@@ -1084,7 +1122,12 @@
     fishExporting = true
     fishDensityError = null
     try {
-      const density = await api.fishDensity(exportBins(), [...fishVisible])
+      const density = await fishDensityRecovering(
+        exportBins(),
+        [...fishVisible],
+        fishStore,
+        fishApi,
+      )
       const canvas = renderFishDensityImage(density, genomesInOrder, fishVisible)
       const stamp = new Date().toISOString().slice(0, 10)
       downloadCanvasPng(canvas, `syntrack_fish_${stamp}.png`)
@@ -1116,8 +1159,7 @@
       )
       const ids = full.source.scm_ids
       if (ids.length === 0) return
-      const resp = await api.fishCreate(ids, label, nextFishColor())
-      fishSets.set(label, resp)
+      await createFishSet(ids, label, nextFishColor())
       fishVisible.add(label)
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)

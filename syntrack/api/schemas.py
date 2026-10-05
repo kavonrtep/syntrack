@@ -262,6 +262,13 @@ class FishSetRequest(_Schema):
     scm_ids: list[str]
     label: str
     color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    replace: bool = False
+    """Overwrite an existing set with the same label instead of 409.
+
+    The client owns its sets (it keeps the SCM IDs) and re-asserts them after
+    a server restart or a label collision with another browser session, so it
+    needs a way to say "I mean this set" rather than failing.
+    """
 
 
 class FishSetSchema(_Schema):
@@ -311,6 +318,10 @@ class FishDensitySet(_Schema):
 class FishDensityResponse(_Schema):
     bins: int
     sets: list[FishDensitySet]
+    missing: list[str] = Field(default_factory=list)
+    """Requested labels the server does not hold (e.g. it restarted since the
+    set was created). Reported rather than raised so one stale label cannot
+    fail the whole preview; the client re-creates these and retries."""
 
 
 # ------------------------------ /api/fish/{label}/scms ---------------------

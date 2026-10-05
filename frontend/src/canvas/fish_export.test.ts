@@ -23,6 +23,7 @@ describe('fish_export', () => {
     const density: FishDensityResponse = {
       bins: 2,
       sets: [{ label: 'red', color: '#ff0000', scm_count: 1, max_count: 1, genomes: { A: [1, 0] } }],
+      missing: [],
     }
     const genomes = [genome('A'), genome('B')]
     const canvas = renderFishDensityImage(density, genomes, new Set(['red']))

@@ -20,6 +20,21 @@ const API_BASE = '/api'
 
 type QueryValue = string | number | undefined | null
 
+/** API failure carrying the HTTP status, so callers can recover from a
+ *  specific code (404 for a set the server forgot, 409 for a label another
+ *  browser session already took) instead of matching on the message. */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly path: string,
+    readonly body: string,
+    readonly statusText: string,
+  ) {
+    super(`API ${status} ${statusText} on ${path}: ${body}`)
+    this.name = 'ApiError'
+  }
+}
+
 async function request<T>(
   path: string,
   params: Record<string, QueryValue> = {},
@@ -37,7 +52,7 @@ async function request<T>(
   })
   if (!resp.ok) {
     const body = await resp.text()
-    throw new Error(`API ${resp.status} ${resp.statusText} on ${path}: ${body}`)
+    throw new ApiError(resp.status, path, body, resp.statusText)
   }
   return (await resp.json()) as T
 }
@@ -108,7 +123,7 @@ export const api = {
     }).then(async (resp) => {
       if (!resp.ok) {
         const body = await resp.text()
-        throw new Error(`API ${resp.status} ${resp.statusText} on /align: ${body}`)
+        throw new ApiError(resp.status, '/align', body, resp.statusText)
       }
       return (await resp.json()) as AlignmentResponse
     })
@@ -129,11 +144,11 @@ export const api = {
   config: (signal?: AbortSignal) =>
     request<ConfigResponse>('/config', {}, { signal }),
 
-  fishCreate: (scm_ids: string[], label: string, color: string) =>
+  fishCreate: (scm_ids: string[], label: string, color: string, replace = false) =>
     request<FishSetResponse>('/fish', {}, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scm_ids, label, color }),
+      body: JSON.stringify({ scm_ids, label, color, replace }),
     }),
 
   fishList: () => request<FishListResponse>('/fish'),

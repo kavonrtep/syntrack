@@ -4,6 +4,12 @@
 A FISH set is a user-supplied list of SCM IDs resolved to positions across
 every loaded genome.  Sets are stored in-memory on ``AppState`` and persist
 until the server restarts or the user explicitly deletes them.
+
+The store is therefore a *cache*, not the owner: the browser keeps the SCM IDs
+of every set it created and re-asserts them (``replace``) when the server has
+forgotten them. Endpoints here consequently report a missing label where they
+can, instead of failing a whole request, and the store is capped so a shared
+instance cannot grow without bound.
 """
 
 from __future__ import annotations
@@ -28,6 +34,16 @@ from syntrack.api.schemas import (
 from syntrack.api.state import AppState
 
 router = APIRouter()
+
+MAX_FISH_SETS = 64
+"""Cap on stored sets. Several browser sessions can share one process, so the
+store is bounded and evicts the least-recently-created set; the owning client
+re-creates it on demand from the SCM IDs it kept.
+
+The pool is global, so if the sets in active use across all browsers exceed
+this cap, two busy sessions can evict each other's visible set repeatedly
+(each re-creation evicts the other's oldest entry). Per-session pools fix that
+properly — see ``docs/design/FISH_SESSION_SCOPE.md``."""
 
 
 def _strand_str(strand: int) -> str:
@@ -125,12 +141,22 @@ def create_fish_set(
     req: FishSetRequest,
     state: AppState = Depends(get_state),
 ) -> FishSetResponse:
-    if req.label in state.fish_sets:
-        raise HTTPException(409, f"FISH set with label {req.label!r} already exists")
     scm_arr = _resolve_indices(req.scm_ids, state)
     result = _resolve_fish_set(req, scm_arr, state)
-    state.fish_sets[req.label] = result
-    state.fish_set_indices[req.label] = scm_arr
+    # The duplicate check, the eviction and the insert are one transaction: two
+    # concurrent requests would otherwise pick the same victim and leave the
+    # two dicts disagreeing (or raise KeyError on the second delete).
+    with state.fish_lock:
+        if req.label in state.fish_sets and not req.replace:
+            raise HTTPException(409, f"FISH set with label {req.label!r} already exists")
+        state.fish_sets.pop(req.label, None)
+        state.fish_set_indices.pop(req.label, None)
+        while len(state.fish_sets) >= MAX_FISH_SETS:
+            oldest = next(iter(state.fish_sets))
+            del state.fish_sets[oldest]
+            state.fish_set_indices.pop(oldest, None)
+        state.fish_sets[req.label] = result
+        state.fish_set_indices[req.label] = scm_arr
     return result
 
 
@@ -138,6 +164,8 @@ def create_fish_set(
 def list_fish_sets(
     state: AppState = Depends(get_state),
 ) -> FishListResponse:
+    with state.fish_lock:
+        stored = list(state.fish_sets.values())
     sets = [
         FishSetSchema(
             label=fs.label,
@@ -145,7 +173,7 @@ def list_fish_sets(
             scm_count=fs.scm_count,
             genome_coverage=fs.genome_coverage,
         )
-        for fs in state.fish_sets.values()
+        for fs in stored
     ]
     return FishListResponse(sets=sets)
 
@@ -155,10 +183,11 @@ def delete_fish_set(
     label: str,
     state: AppState = Depends(get_state),
 ) -> None:
-    if label not in state.fish_sets:
-        raise HTTPException(404, f"FISH set {label!r} not found")
-    del state.fish_sets[label]
-    state.fish_set_indices.pop(label, None)
+    with state.fish_lock:
+        if label not in state.fish_sets:
+            raise HTTPException(404, f"FISH set {label!r} not found")
+        del state.fish_sets[label]
+        state.fish_set_indices.pop(label, None)
 
 
 @router.post("/fish/density", response_model=FishDensityResponse)
@@ -174,13 +203,22 @@ def fish_density(
     ``[0, total_length)``. Nothing is subsampled, so the result is the ground
     truth the on-screen capped view can be checked against.
     """
-    labels = req.labels if req.labels is not None else list(state.fish_sets.keys())
+    with state.fish_lock:
+        labels = req.labels if req.labels is not None else list(state.fish_sets.keys())
+        # (set, indices) pairs must be read together, or an eviction between
+        # the two lookups would pair a set with another's membership.
+        snapshot = [
+            (label, state.fish_sets.get(label), state.fish_set_indices.get(label))
+            for label in labels
+        ]
     sets_out: list[FishDensitySet] = []
-    for label in labels:
-        fs = state.fish_sets.get(label)
+    missing: list[str] = []
+    for label, fs, idxs in snapshot:
         if fs is None:
-            raise HTTPException(404, f"FISH set {label!r} not found")
-        idxs = state.fish_set_indices.get(label)
+            # A set this process never had or has since evicted/restarted away.
+            # Reporting it keeps the preview working for the sets that resolve.
+            missing.append(label)
+            continue
         genomes_out: dict[str, list[int]] = {}
         max_count = 0
         for genome_id in state.scm_store.genome_ids:
@@ -203,7 +241,7 @@ def fish_density(
                 genomes=genomes_out,
             )
         )
-    return FishDensityResponse(bins=req.bins, sets=sets_out)
+    return FishDensityResponse(bins=req.bins, sets=sets_out, missing=missing)
 
 
 @router.get("/fish/{label}/scms", response_model=FishSetScmsResponse)
@@ -214,9 +252,10 @@ def fish_set_scms(
     """Return the FISH set's COMPLETE SCM membership + per-genome presence, for
     saving the set to file. Uses the full stored index set (not the capped
     overlay positions), so the export is complete regardless of set size."""
-    if label not in state.fish_sets:
-        raise HTTPException(404, f"FISH set {label!r} not found")
-    idxs = state.fish_set_indices.get(label)
+    with state.fish_lock:
+        if label not in state.fish_sets:
+            raise HTTPException(404, f"FISH set {label!r} not found")
+        idxs = state.fish_set_indices.get(label)
     universe = state.scm_store.universe
     if idxs is None or idxs.size == 0:
         return FishSetScmsResponse(label=label, scm_ids=[], presence={})

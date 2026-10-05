@@ -8,10 +8,19 @@ Fixture recap (see tests/api/conftest.py):
 Universe: OG01..OG14 (14 SCMs).
 """
 
+import concurrent.futures
+import threading
+
 from fastapi.testclient import TestClient
 
-from syntrack.api.routes_fish import _resolve_fish_set, _resolve_indices
+from syntrack.api.routes_fish import (
+    MAX_FISH_SETS,
+    _resolve_fish_set,
+    _resolve_indices,
+    create_fish_set,
+)
 from syntrack.api.schemas import FishSetRequest
+from syntrack.api.state import AppState
 
 
 def test_create_fish_set(client: TestClient) -> None:
@@ -96,6 +105,87 @@ def test_duplicate_label_409(client: TestClient) -> None:
         json={"scm_ids": ["OG02"], "label": "dup", "color": "#222222"},
     )
     assert resp2.status_code == 409
+
+
+def test_duplicate_label_replace_overwrites(client: TestClient) -> None:
+    """``replace`` lets the owning client re-assert a set after a restart or a
+    label collision with another browser session."""
+    client.post(
+        "/api/fish",
+        json={"scm_ids": ["OG01"], "label": "dup", "color": "#111111"},
+    )
+    resp = client.post(
+        "/api/fish",
+        json={
+            "scm_ids": ["OG02", "OG03"],
+            "label": "dup",
+            "color": "#222222",
+            "replace": True,
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["scm_count"] == 2
+    assert body["color"] == "#222222"
+    # Exactly one set under that label, and the new membership is what the
+    # index-backed endpoints see.
+    labels = [s["label"] for s in client.get("/api/fish").json()["sets"]]
+    assert labels.count("dup") == 1
+    assert client.get("/api/fish/dup/scms").json()["scm_ids"] == ["OG02", "OG03"]
+
+
+def test_fish_set_store_is_capped(client: TestClient) -> None:
+    """A shared process must not grow without bound; the oldest set is evicted."""
+    for n in range(MAX_FISH_SETS + 3):
+        resp = client.post(
+            "/api/fish",
+            json={"scm_ids": ["OG01"], "label": f"set{n:03d}", "color": "#FF0000"},
+        )
+        assert resp.status_code == 201
+    labels = [s["label"] for s in client.get("/api/fish").json()["sets"]]
+    assert len(labels) == MAX_FISH_SETS
+    assert "set000" not in labels
+    assert f"set{MAX_FISH_SETS + 2:03d}" in labels
+
+
+def test_concurrent_creates_keep_the_two_stores_consistent(app_state: AppState) -> None:
+    """Create/evict must be one transaction.
+
+    Several browsers share one process and FastAPI dispatches these sync
+    handlers to a thread pool, so creates really do run in parallel threads.
+    Without ``fish_lock``, two threads pick the same eviction victim and the
+    second ``del`` raises KeyError, or ``fish_sets`` and ``fish_set_indices``
+    end up disagreeing. The window is narrow under the GIL — inserting a
+    ``time.sleep(0)`` between picking the victim and deleting it makes the
+    unlocked version fail every run — so this asserts the post-condition
+    rather than relying on hitting the race.
+    """
+    n_threads = 16
+    barrier = threading.Barrier(n_threads)
+    errors: list[Exception] = []
+
+    def create(n: int) -> None:
+        barrier.wait()
+        try:
+            for k in range(20):
+                create_fish_set(
+                    FishSetRequest(
+                        scm_ids=["OG01", "OG02"],
+                        label=f"race{n:04d}_{k:02d}",
+                        color="#FF0000",
+                    ),
+                    app_state,
+                )
+        except Exception as exc:  # any escape is the failure
+            errors.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as pool:
+        list(pool.map(create, range(n_threads)))
+
+    assert not errors, errors[:3]
+    with app_state.fish_lock:
+        assert len(app_state.fish_sets) == MAX_FISH_SETS
+        assert set(app_state.fish_sets) == set(app_state.fish_set_indices)
 
 
 def test_list_fish_sets(client: TestClient) -> None:
@@ -193,9 +283,22 @@ def test_fish_density_specific_labels_and_presence(client: TestClient) -> None:
         assert sum(g["genomes"][gid]) == 1  # OG05 present once in each
 
 
-def test_fish_density_unknown_label_404(client: TestClient) -> None:
+def test_fish_density_unknown_label_reported_not_404(client: TestClient) -> None:
+    """One stale label must not fail the whole preview; it comes back in ``missing``."""
     resp = client.post("/api/fish/density", json={"bins": 5, "labels": ["nope"]})
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["sets"] == []
+    assert body["missing"] == ["nope"]
+
+
+def test_fish_density_mixes_known_and_missing(client: TestClient) -> None:
+    client.post("/api/fish", json={"scm_ids": ["OG01"], "label": "live", "color": "#FF0000"})
+    resp = client.post("/api/fish/density", json={"bins": 5, "labels": ["live", "gone"]})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [s["label"] for s in body["sets"]] == ["live"]
+    assert body["missing"] == ["gone"]
 
 
 def test_fish_density_no_sets_returns_empty(client: TestClient) -> None:
@@ -213,7 +316,9 @@ def test_fish_density_dropped_after_delete(client: TestClient) -> None:
     client.post("/api/fish", json={"scm_ids": ["OG01"], "label": "tmp", "color": "#FF0000"})
     assert client.delete("/api/fish/tmp").status_code == 204
     # Indices were removed too -> density no longer knows the label.
-    assert client.post("/api/fish/density", json={"bins": 5, "labels": ["tmp"]}).status_code == 404
+    resp = client.post("/api/fish/density", json={"bins": 5, "labels": ["tmp"]})
+    assert resp.status_code == 200
+    assert resp.json()["missing"] == ["tmp"]
 
 
 def test_fish_overlay_positions_subsample_not_head_truncate(app_state) -> None:  # type: ignore[no-untyped-def]
