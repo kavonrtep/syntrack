@@ -2,14 +2,15 @@
 (design §F4, Phase 3).
 
 A FISH set is a user-supplied list of SCM IDs resolved to positions across
-every loaded genome.  Sets are stored in-memory on ``AppState`` and persist
-until the server restarts or the user explicitly deletes them.
+every loaded genome.  Sets are stored in-memory and persist until the server
+restarts, the owning session goes idle, or the user deletes them.
 
-The store is therefore a *cache*, not the owner: the browser keeps the SCM IDs
-of every set it created and re-asserts them (``replace``) when the server has
-forgotten them. Endpoints here consequently report a missing label where they
-can, instead of failing a whole request, and the store is capped so a shared
-instance cannot grow without bound.
+Sets are namespaced per browser session (``X-SynTrack-Session``), because one
+process serves several users — see ``docs/design/FISH_SESSION_SCOPE.md``. The
+store remains a *cache*, not the owner: the browser keeps the SCM IDs of every
+set it created and re-asserts them (``replace``) when the server has forgotten
+them. Endpoints here consequently report a missing label where they can,
+instead of failing a whole request.
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ from __future__ import annotations
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 
-from syntrack.api.deps import get_state
+from syntrack.api.deps import get_session, get_state
+from syntrack.api.fish_store import FishSetTooLargeError
 from syntrack.api.sampling import subsample_indices
 from syntrack.api.schemas import (
     FishDensityRequest,
@@ -34,16 +36,6 @@ from syntrack.api.schemas import (
 from syntrack.api.state import AppState
 
 router = APIRouter()
-
-MAX_FISH_SETS = 64
-"""Cap on stored sets. Several browser sessions can share one process, so the
-store is bounded and evicts the least-recently-created set; the owning client
-re-creates it on demand from the SCM IDs it kept.
-
-The pool is global, so if the sets in active use across all browsers exceed
-this cap, two busy sessions can evict each other's visible set repeatedly
-(each re-creation evicts the other's oldest entry). Per-session pools fix that
-properly — see ``docs/design/FISH_SESSION_SCOPE.md``."""
 
 
 def _strand_str(strand: int) -> str:
@@ -140,32 +132,30 @@ def _resolve_fish_set(
 def create_fish_set(
     req: FishSetRequest,
     state: AppState = Depends(get_state),
+    session: str = Depends(get_session),
 ) -> FishSetResponse:
     scm_arr = _resolve_indices(req.scm_ids, state)
     result = _resolve_fish_set(req, scm_arr, state)
-    # The duplicate check, the eviction and the insert are one transaction: two
-    # concurrent requests would otherwise pick the same victim and leave the
-    # two dicts disagreeing (or raise KeyError on the second delete).
-    with state.fish_lock:
-        if req.label in state.fish_sets and not req.replace:
-            raise HTTPException(409, f"FISH set with label {req.label!r} already exists")
-        state.fish_sets.pop(req.label, None)
-        state.fish_set_indices.pop(req.label, None)
-        while len(state.fish_sets) >= MAX_FISH_SETS:
-            oldest = next(iter(state.fish_sets))
-            del state.fish_sets[oldest]
-            state.fish_set_indices.pop(oldest, None)
-        state.fish_sets[req.label] = result
-        state.fish_set_indices[req.label] = scm_arr
+    try:
+        state.fish.put(session, req.label, result, scm_arr, replace=req.replace)
+    except KeyError as exc:
+        raise HTTPException(409, f"FISH set with label {req.label!r} already exists") from exc
+    except FishSetTooLargeError as exc:
+        raise HTTPException(
+            413,
+            f"marker set {req.label!r} needs {exc.nbytes} bytes of index, "
+            f"over the {exc.limit}-byte budget",
+        ) from exc
     return result
 
 
 @router.get("/fish", response_model=FishListResponse)
 def list_fish_sets(
     state: AppState = Depends(get_state),
+    session: str = Depends(get_session),
 ) -> FishListResponse:
-    with state.fish_lock:
-        stored = list(state.fish_sets.values())
+    """This session's sets. Another session's sets are not listed — the client
+    hydrates its sidebar from here on load, so it must see only its own."""
     sets = [
         FishSetSchema(
             label=fs.label,
@@ -173,7 +163,7 @@ def list_fish_sets(
             scm_count=fs.scm_count,
             genome_coverage=fs.genome_coverage,
         )
-        for fs in stored
+        for fs in state.fish.list_sets(session)
     ]
     return FishListResponse(sets=sets)
 
@@ -182,18 +172,17 @@ def list_fish_sets(
 def delete_fish_set(
     label: str,
     state: AppState = Depends(get_state),
+    session: str = Depends(get_session),
 ) -> None:
-    with state.fish_lock:
-        if label not in state.fish_sets:
-            raise HTTPException(404, f"FISH set {label!r} not found")
-        del state.fish_sets[label]
-        state.fish_set_indices.pop(label, None)
+    if not state.fish.delete(session, label):
+        raise HTTPException(404, f"FISH set {label!r} not found")
 
 
 @router.post("/fish/density", response_model=FishDensityResponse)
 def fish_density(
     req: FishDensityRequest,
     state: AppState = Depends(get_state),
+    session: str = Depends(get_session),
 ) -> FishDensityResponse:
     """Per-genome whole-genome density histograms for FISH sets (exact — every
     SCM counted), for the multi-colour density preview / FISH-like render.
@@ -202,29 +191,27 @@ def fish_density(
     histogrammed by genome-global offset into ``bins`` bins over
     ``[0, total_length)``. Nothing is subsampled, so the result is the ground
     truth the on-screen capped view can be checked against.
+
+    Labels this session does not hold come back in ``missing`` rather than
+    raising, so one stale label cannot fail the whole preview.
     """
-    with state.fish_lock:
-        labels = req.labels if req.labels is not None else list(state.fish_sets.keys())
-        # (set, indices) pairs must be read together, or an eviction between
-        # the two lookups would pair a set with another's membership.
-        snapshot = [
-            (label, state.fish_sets.get(label), state.fish_set_indices.get(label))
-            for label in labels
-        ]
+    labels = req.labels if req.labels is not None else state.fish.labels(session)
     sets_out: list[FishDensitySet] = []
     missing: list[str] = []
-    for label, fs, idxs in snapshot:
-        if fs is None:
-            # A set this process never had or has since evicted/restarted away.
-            # Reporting it keeps the preview working for the sets that resolve.
+    for label in labels:
+        stored = state.fish.get(session, label)
+        if stored is None:
+            # A set this session never had, or that a restart / idle eviction
+            # removed. The client re-creates it from the SCM IDs it kept.
             missing.append(label)
             continue
+        fs, idxs = stored
         genomes_out: dict[str, list[int]] = {}
         max_count = 0
         for genome_id in state.scm_store.genome_ids:
             gpos = state.scm_store.genome_positions[genome_id]
             total_len = state.genome_store[genome_id].total_length
-            if idxs is None or idxs.size == 0 or gpos.size == 0 or total_len <= 0:
+            if idxs.size == 0 or gpos.size == 0 or total_len <= 0:
                 genomes_out[genome_id] = [0] * req.bins
                 continue
             mask = np.isin(gpos["scm_id_idx"], idxs, assume_unique=True)
@@ -244,20 +231,35 @@ def fish_density(
     return FishDensityResponse(bins=req.bins, sets=sets_out, missing=missing)
 
 
+@router.get("/fish/{label}", response_model=FishSetResponse)
+def get_fish_set(
+    label: str,
+    state: AppState = Depends(get_state),
+    session: str = Depends(get_session),
+) -> FishSetResponse:
+    """One stored set, positions included, so a reloaded page can rebuild its
+    sidebar and overlay without re-posting the SCM IDs."""
+    stored = state.fish.get(session, label)
+    if stored is None:
+        raise HTTPException(404, f"FISH set {label!r} not found")
+    return stored[0]
+
+
 @router.get("/fish/{label}/scms", response_model=FishSetScmsResponse)
 def fish_set_scms(
     label: str,
     state: AppState = Depends(get_state),
+    session: str = Depends(get_session),
 ) -> FishSetScmsResponse:
     """Return the FISH set's COMPLETE SCM membership + per-genome presence, for
     saving the set to file. Uses the full stored index set (not the capped
     overlay positions), so the export is complete regardless of set size."""
-    with state.fish_lock:
-        if label not in state.fish_sets:
-            raise HTTPException(404, f"FISH set {label!r} not found")
-        idxs = state.fish_set_indices.get(label)
+    stored = state.fish.get(session, label)
+    if stored is None:
+        raise HTTPException(404, f"FISH set {label!r} not found")
+    _, idxs = stored
     universe = state.scm_store.universe
-    if idxs is None or idxs.size == 0:
+    if idxs.size == 0:
         return FishSetScmsResponse(label=label, scm_ids=[], presence={})
 
     scm_ids = [universe[int(i)] for i in idxs]

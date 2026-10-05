@@ -16,6 +16,8 @@ import type {
   SCMsResponse,
 } from './types'
 
+import { sessionHeaders } from './session'
+
 const API_BASE = '/api'
 
 type QueryValue = string | number | undefined | null
@@ -47,7 +49,13 @@ async function request<T>(
     }
   }
   const resp = await fetch(url, {
-    headers: { Accept: 'application/json', ...(init.headers ?? {}) },
+    headers: {
+      Accept: 'application/json',
+      // Namespaces this browser's FISH marker sets; ignored by every other
+      // endpoint (docs/design/FISH_SESSION_SCOPE.md).
+      ...sessionHeaders(),
+      ...(init.headers ?? {}),
+    },
     ...init,
   })
   if (!resp.ok) {
@@ -118,7 +126,7 @@ export const api = {
     if (scalar.k !== undefined) url.searchParams.set('k', String(scalar.k))
     if (targets) for (const t of targets) url.searchParams.append('targets', t)
     return fetch(url, {
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', ...sessionHeaders() },
       signal,
     }).then(async (resp) => {
       if (!resp.ok) {
@@ -152,6 +160,10 @@ export const api = {
     }),
 
   fishList: () => request<FishListResponse>('/fish'),
+
+  /** One stored set with its positions — used to rebuild the sidebar on load. */
+  fishGet: (label: string) =>
+    request<FishSetResponse>(`/fish/${encodeURIComponent(label)}`),
 
   fishDelete: (label: string) =>
     request<void>(`/fish/${encodeURIComponent(label)}`, {}, { method: 'DELETE' }),

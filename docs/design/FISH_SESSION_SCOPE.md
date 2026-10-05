@@ -1,6 +1,6 @@
 # Session scoping for FISH marker sets
 
-**Status:** proposed
+**Status:** implemented
 **Author:** Petr Novák
 **Date:** 2026-10-05
 **Relates to:** `DESIGN_v03.md` §2.1 (deployment assumptions), §F4 (FISH
@@ -42,9 +42,9 @@ every `/api/fish*` request:
 X-SynTrack-Session: 5f2c1e9a8b3d4c7e
 ```
 
-The ID is generated once per browser tab (`crypto.randomUUID()`), kept in
-`sessionStorage` so a reload keeps its sets, and never interpreted by the
-server beyond being a dictionary key. No auth, no cookies, no CORS
+The ID is generated once per browser (`crypto.randomUUID()`), kept in
+`localStorage` so reloads and reopened tabs keep their sets, and never
+interpreted by the server beyond being a dictionary key. No auth, no cookies, no CORS
 complications — it is a namespace, not a credential.
 
 ```python
@@ -84,8 +84,10 @@ Consequences worth stating explicitly:
 - Scoping anything else per session. Genome data, pair caches and paint caches
   are read-only derived state and stay global — that is where the memory
   budget goes, and sharing them is the point.
-- Cross-tab sharing within one browser. Each tab is its own session; two tabs
-  of the same user do not see each other's sets.
+- Separating tabs within one browser. The ID lives in `localStorage`, so all
+  tabs of one browser share one session and therefore one set of marker sets.
+  Two people sharing a desktop login also share sets; that is accepted, since
+  a session ID is a namespace, not a credential.
 
 ## 4. Data structures
 
@@ -106,20 +108,22 @@ class AppState:
     fish_sessions: dict[str, FishSession] = field(default_factory=dict)
 ```
 
-Bounds (a shared process must not grow without limit):
+Bounds (a shared process must not grow without limit). An index array is
+`int32` per member SCM, so a 100k-SCM set costs 400 kB and set *counts* are a
+poor proxy for memory: 32 sessions × 64 sets × 400 kB ≈ 800 MB would breach
+the ~1.3 GB budget in `CLAUDE.md`. The authoritative cap is therefore on
+bytes:
 
-- `MAX_FISH_SESSIONS = 32` — on overflow, evict the session with the oldest
-  `last_seen`.
-- `MAX_FISH_SETS = 64` per session, evicting least-recently-created, as now.
-- `FISH_SESSION_TTL = 12 h` — sessions idle longer than this are dropped on
-  the next request.
-
-Memory: an index array is `int32` per member SCM, so a 100k-SCM set costs
-400 kB. The worst case under these caps is 32 × 64 × 400 kB ≈ 800 MB, which
-would blow the ~1.3 GB budget in `CLAUDE.md`. Therefore the cap is on total
-bytes, not set count: `MAX_FISH_BYTES = 128 MB` summed across all sessions,
-evicting oldest-session-first until it fits. Set and session counts stay as
-cheap secondary guards.
+- `MAX_FISH_BYTES = 128 MB` — total `nbytes` of all index arrays across all
+  sessions. On overflow, whole sessions are evicted oldest-`last_seen` first
+  until the new set fits. A single set larger than the cap is rejected with
+  `413`, since evicting everything still would not make it fit.
+- `MAX_FISH_SETS = 64` per session, evicting least-recently-created — a cheap
+  secondary guard, and the per-session pool removes the cross-session
+  eviction thrash that the global pool had.
+- `MAX_FISH_SESSIONS = 32`, evicting oldest `last_seen` first.
+- `FISH_SESSION_TTL = 12 h` — sessions idle longer are dropped on the next
+  request.
 
 ## 5. Failure modes
 
@@ -130,7 +134,8 @@ cheap secondary guards.
 | Session evicted (TTL, byte cap) | Same as unknown: transparent re-assertion, one extra round trip |
 | Label collision within a session | Unchanged: 409 unless `replace: true` |
 | Label used by *another* session | No longer visible; no collision, no takeover |
-| Two tabs, same user | Separate sets. A set created in one tab is not listed in the other — accepted (see non-goals) |
+| Two tabs, same browser | Same session, same sets (`localStorage`) |
+| Single set larger than `MAX_FISH_BYTES` | `413`, with the byte size in the detail; evicting other sessions would not help |
 
 Logged at DEBUG: session creation, eviction (with reason and freed bytes),
 and re-assertion of an unknown label. Nothing is logged per request.
@@ -156,12 +161,36 @@ Frontend: the session ID is generated once, reused across requests within a
 tab, persists across a reload, and differs between tabs — unit-testable as a
 helper module (`frontend/src/api/session.ts`), separate from `App.svelte`.
 
-## 7. Open questions
+## 7. Implementation notes
 
-- Is per-tab the right granularity, or per browser (`localStorage`), so a
-  reopened tab inherits the user's sets? Per-browser is friendlier; per-tab is
-  stricter about two people on one machine. Recommend `localStorage` with a
-  per-browser ID, which also removes the two-tab surprise above.
-- Should `GET /api/fish` gain an `?all=true` for debugging a shared instance?
-  Useful operationally, but it exposes other sessions' labels. Recommend
-  leaving it out and relying on DEBUG logs.
+Implemented in `syntrack/api/fish_store.py` (`FishStore`, `FishSession`),
+`syntrack/api/deps.py` (`get_session`), the five `/api/fish*` routes, and
+`frontend/src/api/session.ts`. Deviations from the design above:
+
+- **One extra endpoint: `GET /api/fish/{label}`.** §2 assumed the client could
+  rebuild its sidebar from `GET /api/fish`, but that returns summaries without
+  positions, which the overlay needs. The stored response already holds the
+  positions, so the getter returns it unchanged — no re-resolution.
+- **`413` for an oversize set**, as in §5, and additionally: when the caller's
+  own session is the only one left, its oldest sets are shed before the request
+  is refused. §4 only described evicting *other* sessions.
+- **A hydrated set carries no SCM IDs**, so it cannot be self-healed after a
+  later restart: the next operation on it drops it from the sidebar and
+  reports why (the Stage 1 recovery path). Persisting IDs in `localStorage`
+  would fix that, but a 100k-SCM set is ~2 MB of ID strings against a ~5 MB
+  quota, so it was not done. Failure of hydration *itself* is silent — an
+  empty sidebar is the pre-hydration behaviour, not an error.
+- **Visibility is not restored.** Hydrated sets appear unticked, because which
+  sets were visible is browser state the server never saw.
+
+## 8. Decisions taken
+
+- **Granularity: per browser** (`localStorage`), not per tab. A reopened tab
+  inherits the user's sets, and all tabs of one browser agree. Decided
+  2026-10-05.
+- **Bound: total bytes, 128 MB** across all sessions (§4), rather than set
+  counts alone, which understate memory by an order of magnitude. Decided
+  2026-10-05.
+- **No `GET /api/fish?all=true`.** Operationally handy for debugging a shared
+  instance, but it would expose other sessions' labels. DEBUG logs carry the
+  same information for whoever runs the server.

@@ -241,7 +241,31 @@
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     }
+    await hydrateFishSets()
   })
+
+  /** Rebuild the marker-set sidebar from the sets this session still holds on
+   *  the server, so a page reload does not lose them (and does not then
+   *  collide with them on re-import). Sets come back unticked: which ones were
+   *  visible is not server state. Their SCM IDs are not recoverable this way,
+   *  so a set hydrated here cannot be self-healed after a later restart — it
+   *  is dropped with a message instead. Failure is silent: an empty sidebar is
+   *  the old behaviour, not an error worth a banner. */
+  async function hydrateFishSets(): Promise<void> {
+    let labels: string[]
+    try {
+      labels = (await api.fishList()).sets.map((s) => s.label)
+    } catch {
+      return
+    }
+    for (const label of labels) {
+      try {
+        fishSets.set(label, await api.fishGet(label))
+      } catch {
+        // Gone between the list and the fetch — nothing to restore.
+      }
+    }
+  }
 
   $effect(() => {
     if (!containerEl) return

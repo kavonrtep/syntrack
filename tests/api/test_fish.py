@@ -13,12 +13,8 @@ import threading
 
 from fastapi.testclient import TestClient
 
-from syntrack.api.routes_fish import (
-    MAX_FISH_SETS,
-    _resolve_fish_set,
-    _resolve_indices,
-    create_fish_set,
-)
+from syntrack.api.fish_store import MAX_FISH_SETS
+from syntrack.api.routes_fish import _resolve_fish_set, _resolve_indices, create_fish_set
 from syntrack.api.schemas import FishSetRequest
 from syntrack.api.state import AppState
 
@@ -153,9 +149,9 @@ def test_concurrent_creates_keep_the_two_stores_consistent(app_state: AppState) 
 
     Several browsers share one process and FastAPI dispatches these sync
     handlers to a thread pool, so creates really do run in parallel threads.
-    Without ``fish_lock``, two threads pick the same eviction victim and the
-    second ``del`` raises KeyError, or ``fish_sets`` and ``fish_set_indices``
-    end up disagreeing. The window is narrow under the GIL — inserting a
+    Without the store's lock, two threads pick the same eviction victim and
+    the second ``del`` raises KeyError, or the set and index dicts end up
+    disagreeing. The window is narrow under the GIL — inserting a
     ``time.sleep(0)`` between picking the victim and deleting it makes the
     unlocked version fail every run — so this asserts the post-condition
     rather than relying on hitting the race.
@@ -175,6 +171,7 @@ def test_concurrent_creates_keep_the_two_stores_consistent(app_state: AppState) 
                         color="#FF0000",
                     ),
                     app_state,
+                    "shared-session",
                 )
         except Exception as exc:  # any escape is the failure
             errors.append(exc)
@@ -183,9 +180,7 @@ def test_concurrent_creates_keep_the_two_stores_consistent(app_state: AppState) 
         list(pool.map(create, range(n_threads)))
 
     assert not errors, errors[:3]
-    with app_state.fish_lock:
-        assert len(app_state.fish_sets) == MAX_FISH_SETS
-        assert set(app_state.fish_sets) == set(app_state.fish_set_indices)
+    assert len(app_state.fish.labels("shared-session")) == MAX_FISH_SETS
 
 
 def test_list_fish_sets(client: TestClient) -> None:

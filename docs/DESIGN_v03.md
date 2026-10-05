@@ -150,10 +150,12 @@ Rationale:
 - Canvas rendering handles 10K+ connections at interactive frame rates.
 - FastAPI serves as a lightweight local API; no external deployment needed.
 - Decoupled frontend/backend allows independent iteration.
-- Single-user local deployment — no auth, no database, file-based data.
-  **Superseded in practice:** instances are deployed shared, with several
-  users on one process, which makes FISH marker-set labels a global namespace.
-  See `docs/design/FISH_SESSION_SCOPE.md` (proposed).
+- Local deployment — no auth, no database, file-based data. Originally
+  single-user; instances are in fact deployed shared, with several users on
+  one process, so FISH marker sets are namespaced per browser session
+  (`X-SynTrack-Session`). See `docs/design/FISH_SESSION_SCOPE.md`
+  (implemented). Everything else — genome data, pair and paint caches — stays
+  global and read-only, which is where the memory budget goes.
 
 ### 2.2 Component Overview
 
@@ -753,17 +755,21 @@ Response:
 Implementation: identical to highlight but with arbitrary SCM set as input
 instead of region-derived set. Both use scm_to_genomes lookup.
 
-**Ownership.** The server store (`AppState.fish_sets`) is a *cache*, not the
-owner of a set. It is emptied by a restart and, where one process serves
-several browsers (§2.1 no longer holds in practice — see
-`docs/design/FISH_SESSION_SCOPE.md`), shared between sessions. The client
-therefore keeps the SCM IDs of every set it created and re-asserts them:
+**Ownership.** The server store (`AppState.fish`) is a *cache*, not the owner
+of a set: it is emptied by a restart and by idle eviction. Sets are private to
+the browser session that created them (`X-SynTrack-Session`;
+`docs/design/FISH_SESSION_SCOPE.md`). The client keeps the SCM IDs of every set
+it created and re-asserts them:
 
 - `replace: true` on the request overwrites an existing label instead of
   returning 409. Used when the server has forgotten a set, or when another
   session holds the label.
-- The store is capped (`MAX_FISH_SETS`), evicting the least recently created
-  set; the owning client re-creates it on demand.
+- The store is bounded by total index bytes (`MAX_FISH_BYTES`), evicting whole
+  idle sessions first and then the session's own oldest sets; the owning client
+  re-creates what it needs on demand. A set larger than the whole budget is
+  refused with `413`.
+- `GET /api/fish` and `GET /api/fish/{label}` return only the calling session's
+  sets, which is what the client hydrates its sidebar from on load.
 - `POST /api/fish/density` reports unknown labels in `missing` rather than
   raising 404, so one stale label cannot fail a whole preview. The client
   re-creates those sets and retries once; a set it cannot restore is dropped
