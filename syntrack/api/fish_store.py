@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -24,7 +25,18 @@ if TYPE_CHECKING:
 
     from syntrack.api.schemas import FishSetResponse
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("syntrack.fish")
+
+REMOVAL_HISTORY = 256
+"""How many recent removals to remember, so a later miss can say *why* a set
+is gone instead of just reporting it absent. Cheap: a label and a reason."""
+
+
+def _sid(session_key: str) -> str:
+    """Short form of a session key for logs — enough to correlate a user's
+    requests, short enough to read. The key is opaque, not a secret."""
+    return session_key[:8]
+
 
 MAX_FISH_BYTES = 128 * 1024 * 1024
 """Total ``nbytes`` of all stored index arrays, across all sessions."""
@@ -69,7 +81,15 @@ class FishSetTooLargeError(Exception):
 class FishStore:
     """Session-namespaced marker sets with byte-bounded eviction."""
 
-    __slots__ = ("_lock", "_max_bytes", "_max_sessions", "_max_sets", "_sessions", "_ttl_s")
+    __slots__ = (
+        "_lock",
+        "_max_bytes",
+        "_max_sessions",
+        "_max_sets",
+        "_removed",
+        "_sessions",
+        "_ttl_s",
+    )
 
     def __init__(
         self,
@@ -80,6 +100,9 @@ class FishStore:
         ttl_s: float = FISH_SESSION_TTL_S,
     ) -> None:
         self._sessions: dict[str, FishSession] = {}
+        # (session_key, label, reason, monotonic_ts) for the most recent
+        # removals, newest last. Read by ``miss_reason``.
+        self._removed: deque[tuple[str, str, str, float]] = deque(maxlen=REMOVAL_HISTORY)
         self._lock = threading.RLock()
         self._max_bytes = max_bytes
         self._max_sets = max_sets
@@ -88,13 +111,43 @@ class FishStore:
 
     # ----------------------------- internals ------------------------------
 
+    def _record_removal(self, session_key: str, label: str, reason: str, now: float) -> None:
+        """Remember that a set went away, so a later 404 can explain itself."""
+        self._removed.append((session_key, label, reason, now))
+
+    def _drop_set(self, session_key: str, session: FishSession, label: str, reason: str) -> None:
+        """Remove one set with bookkeeping and a log line. Caller holds the lock."""
+        freed = int(session.indices[label].nbytes) if label in session.indices else 0
+        session.sets.pop(label, None)
+        session.indices.pop(label, None)
+        self._record_removal(session_key, label, reason, time.monotonic())
+        logger.info(
+            "fish: dropped set sid=%s label=%r reason=%s freed=%dB sets_left=%d",
+            _sid(session_key),
+            label,
+            reason,
+            freed,
+            len(session.sets),
+        )
+
     def _expire(self, now: float) -> None:
         """Drop sessions idle beyond the TTL. Caller holds the lock."""
         stale = [key for key, s in self._sessions.items() if now - s.last_seen > self._ttl_s]
         for key in stale:
-            freed = self._sessions[key].nbytes
+            session = self._sessions[key]
+            freed = session.nbytes
+            idle_s = now - session.last_seen
+            for label in list(session.sets):
+                self._record_removal(key, label, "session idle > TTL", now)
             del self._sessions[key]
-            logger.debug("fish: expired session %s (idle, freed %d bytes)", key, freed)
+            logger.info(
+                "fish: expired session sid=%s (idle %.0fs > ttl %.0fs, %d sets, freed %dB)",
+                _sid(key),
+                idle_s,
+                self._ttl_s,
+                len(session.sets),
+                freed,
+            )
 
     def _touch(self, key: str, now: float) -> FishSession:
         """Get or create a session and mark it active. Caller holds the lock."""
@@ -104,7 +157,7 @@ class FishStore:
                 self._evict_oldest(exclude=key, reason="session cap")
             session = FishSession()
             self._sessions[key] = session
-            logger.debug("fish: new session %s", key)
+            logger.info("fish: new session sid=%s (sessions=%d)", _sid(key), len(self._sessions))
         session.last_seen = now
         return session
 
@@ -117,9 +170,20 @@ class FishStore:
         if not candidates:
             return False
         victim = min(candidates, key=lambda k: self._sessions[k].last_seen)
-        freed = self._sessions[victim].nbytes
+        session = self._sessions[victim]
+        freed = session.nbytes
+        now = time.monotonic()
+        for label in list(session.sets):
+            self._record_removal(victim, label, f"session evicted ({reason})", now)
         del self._sessions[victim]
-        logger.debug("fish: evicted session %s (%s, freed %d bytes)", victim, reason, freed)
+        logger.info(
+            "fish: evicted session sid=%s (%s, %d sets, freed %dB, sessions=%d)",
+            _sid(victim),
+            reason,
+            len(session.sets),
+            freed,
+            len(self._sessions),
+        )
         return True
 
     # ------------------------------- API ----------------------------------
@@ -139,8 +203,16 @@ class FishStore:
             KeyError: the label exists and ``replace`` is False.
             FishSetTooLargeError: the set alone exceeds the byte budget.
         """
+        req_replace = replace
         needed = int(indices.nbytes)
         if needed > self._max_bytes:
+            logger.warning(
+                "fish: refused sid=%s label=%r index=%dB over budget=%dB",
+                _sid(session_key),
+                label,
+                needed,
+                self._max_bytes,
+            )
             raise FishSetTooLargeError(needed, self._max_bytes)
         now = time.monotonic()
         with self._lock:
@@ -153,21 +225,52 @@ class FishStore:
             session.sets.pop(label, None)
             session.indices.pop(label, None)
             while len(session.sets) >= self._max_sets:
-                oldest = next(iter(session.sets))
-                del session.sets[oldest]
-                session.indices.pop(oldest, None)
-                logger.debug("fish: dropped %s/%s (set cap)", session_key, oldest)
+                self._drop_set(
+                    session_key, session, next(iter(session.sets)), f"set cap ({self._max_sets})"
+                )
             while self._total_bytes() + needed > self._max_bytes:
                 if not self._evict_oldest(exclude=session_key, reason="byte cap"):
                     # Only this session is left; shed its own oldest sets.
                     if not session.sets:
                         raise FishSetTooLargeError(needed, self._max_bytes)
-                    oldest = next(iter(session.sets))
-                    del session.sets[oldest]
-                    session.indices.pop(oldest, None)
-                    logger.debug("fish: dropped %s/%s (byte cap)", session_key, oldest)
+                    self._drop_set(
+                        session_key, session, next(iter(session.sets)), "byte cap (own session)"
+                    )
             session.sets[label] = result
             session.indices[label] = indices
+            logger.info(
+                "fish: stored sid=%s label=%r scms=%d index=%dB replace=%s "
+                "sets=%d total=%dB sessions=%d",
+                _sid(session_key),
+                label,
+                result.scm_count,
+                needed,
+                req_replace,
+                len(session.sets),
+                self._total_bytes(),
+                len(self._sessions),
+            )
+
+    def miss_reason(self, session_key: str, label: str) -> str:
+        """Why ``label`` is not in ``session_key``, in words, for the 404 detail
+        and the log line. Makes a user's bug report self-diagnosing instead of
+        leaving "not found" to be reconstructed after the fact."""
+        with self._lock:
+            session = self._sessions.get(session_key)
+            recent = [r for r in self._removed if r[0] == session_key and r[1] == label]
+            if recent:
+                _, _, reason, when = recent[-1]
+                ago = time.monotonic() - when
+                detail = f"removed {ago:.0f}s ago: {reason}"
+            elif session is None:
+                detail = "this session holds no sets on this server"
+            else:
+                detail = "this session never held that label"
+            held = len(session.sets) if session else 0
+            return (
+                f"{detail}; session holds {held} set(s), "
+                f"server holds {len(self._sessions)} session(s), {self._total_bytes()}B of indices"
+            )
 
     def get(self, session_key: str, label: str) -> tuple[FishSetResponse, np.ndarray] | None:
         """The set and its index array, read as a pair so they cannot disagree."""
@@ -213,8 +316,7 @@ class FishStore:
             if session is None or label not in session.sets:
                 return False
             session.last_seen = now
-            del session.sets[label]
-            session.indices.pop(label, None)
+            self._drop_set(session_key, session, label, "deleted by user")
             return True
 
     # Introspection for tests and DEBUG logging.

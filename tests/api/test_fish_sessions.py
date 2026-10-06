@@ -219,3 +219,73 @@ def test_evicted_session_can_recreate_its_set(client: TestClient) -> None:
     )
     assert again.status_code == 201
     assert client.get("/api/fish/s/scms", headers=A_HDR).json()["scm_ids"] == ["OG01"]
+
+
+# --------------------------- diagnostics / logging --------------------------
+
+
+def test_404_detail_says_the_set_was_evicted(client: TestClient, app_state: AppState) -> None:
+    """A user's bug report should carry the cause, not just "not found"."""
+    monkey = FishStore(max_sets=2)
+    app_state.fish = monkey
+    for n in range(3):
+        _create(client, f"s{n}", ["OG01"], A_HDR)
+    resp = client.get("/api/fish/s0/scms", headers=A_HDR)
+    assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert "set cap" in detail
+    assert "removed" in detail
+    assert "session holds 2 set(s)" in detail
+
+
+def test_404_detail_distinguishes_never_held_from_removed(
+    client: TestClient,
+    app_state: AppState,
+) -> None:
+    _create(client, "mine", ["OG01"], A_HDR)
+    never = client.get("/api/fish/typo/scms", headers=A_HDR).json()["detail"]
+    assert "never held that label" in never
+    # A session the server has never seen at all reads differently again.
+    unknown = client.get(
+        "/api/fish/mine/scms",
+        headers={"X-SynTrack-Session": "never-seen"},
+    ).json()["detail"]
+    assert "holds no sets on this server" in unknown
+    assert app_state.fish.miss_reason("session-a", "mine").startswith("this session never held")
+
+
+def test_removals_are_logged_with_cause(
+    client: TestClient,
+    app_state: AppState,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app_state.fish = FishStore(max_sets=2)
+    with caplog.at_level("INFO", logger="syntrack.fish"):
+        for n in range(3):
+            _create(client, f"s{n}", ["OG01"], A_HDR)
+    messages = [r.message for r in caplog.records]
+    assert any("stored" in m and "label='s0'" in m for m in messages)
+    assert any("dropped set" in m and "reason=set cap" in m for m in messages)
+
+
+def test_miss_is_logged_at_warning(
+    client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("WARNING", logger="syntrack.fish"):
+        client.get("/api/fish/nope/scms", headers=A_HDR)
+    assert any("miss op=export" in r.message for r in caplog.records)
+    assert all(r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_session_keys_are_abbreviated_in_logs(
+    client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Logs carry a short session prefix — enough to correlate, short to read."""
+    long_id = "0123456789abcdef-0123456789abcdef"
+    with caplog.at_level("INFO", logger="syntrack.fish"):
+        _create(client, "s", ["OG01"], {"X-SynTrack-Session": long_id})
+    joined = "\n".join(r.message for r in caplog.records)
+    assert "sid=01234567 " in joined
+    assert long_id not in joined

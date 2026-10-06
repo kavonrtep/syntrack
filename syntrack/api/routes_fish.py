@@ -15,6 +15,8 @@ instead of failing a whole request.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -36,6 +38,17 @@ from syntrack.api.schemas import (
 from syntrack.api.state import AppState
 
 router = APIRouter()
+
+logger = logging.getLogger("syntrack.fish")
+
+
+def _not_found(state: AppState, session: str, label: str, op: str) -> HTTPException:
+    """404 for a set this session does not hold, carrying *why* — the store
+    remembers recent removals, so the message names the cause (eviction, TTL,
+    never existed) instead of leaving the next bug report to guess."""
+    reason = state.fish.miss_reason(session, label)
+    logger.warning("fish: miss op=%s label=%r (%s)", op, label, reason)
+    return HTTPException(404, f"FISH set {label!r} not found — {reason}")
 
 
 def _strand_str(strand: int) -> str:
@@ -175,7 +188,7 @@ def delete_fish_set(
     session: str = Depends(get_session),
 ) -> None:
     if not state.fish.delete(session, label):
-        raise HTTPException(404, f"FISH set {label!r} not found")
+        raise _not_found(state, session, label, "delete")
 
 
 @router.post("/fish/density", response_model=FishDensityResponse)
@@ -228,6 +241,12 @@ def fish_density(
                 genomes=genomes_out,
             )
         )
+    if missing:
+        logger.warning(
+            "fish: density missing=%s (%s)",
+            missing,
+            "; ".join(f"{m}: {state.fish.miss_reason(session, m)}" for m in missing),
+        )
     return FishDensityResponse(bins=req.bins, sets=sets_out, missing=missing)
 
 
@@ -241,7 +260,7 @@ def get_fish_set(
     sidebar and overlay without re-posting the SCM IDs."""
     stored = state.fish.get(session, label)
     if stored is None:
-        raise HTTPException(404, f"FISH set {label!r} not found")
+        raise _not_found(state, session, label, "get")
     return stored[0]
 
 
@@ -256,7 +275,7 @@ def fish_set_scms(
     overlay positions), so the export is complete regardless of set size."""
     stored = state.fish.get(session, label)
     if stored is None:
-        raise HTTPException(404, f"FISH set {label!r} not found")
+        raise _not_found(state, session, label, "export")
     _, idxs = stored
     universe = state.scm_store.universe
     if idxs.size == 0:
