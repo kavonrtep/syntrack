@@ -75,4 +75,4 @@ CMD ["serve"]
 LABEL org.opencontainers.image.title="SynTrack" \
       org.opencontainers.image.description="Genome synteny visualisation tool (FastAPI + Svelte)." \
       org.opencontainers.image.source="https://github.com/kavonrtep/syntrack" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="GPL-3.0-or-later"

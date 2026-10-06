@@ -4,7 +4,8 @@ version = "0.5.2"
 description = "Genome synteny visualization tool"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [{ name = "Petr Novak" }]
 dependencies = [
     "fastapi>=0.115",

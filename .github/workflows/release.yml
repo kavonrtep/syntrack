@@ -35,7 +35,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=SynTrack
             org.opencontainers.image.description=Genome synteny visualisation tool.
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=GPL-3.0-or-later
       - name: Build + push
         uses: docker/build-push-action@v6
         with:
