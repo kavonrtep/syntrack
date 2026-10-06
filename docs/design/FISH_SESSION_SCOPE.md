@@ -110,17 +110,25 @@ class AppState:
 
 Bounds (a shared process must not grow without limit). An index array is
 `int32` per member SCM, so a 100k-SCM set costs 400 kB and set *counts* are a
-poor proxy for memory: 32 sessions × 64 sets × 400 kB ≈ 800 MB would breach
-the ~1.3 GB budget in `CLAUDE.md`. The authoritative cap is therefore on
-bytes:
+poor proxy for memory. The authoritative cap is therefore on bytes:
 
 - `MAX_FISH_BYTES = 128 MB` — total `nbytes` of all index arrays across all
   sessions. On overflow, whole sessions are evicted oldest-`last_seen` first
   until the new set fits. A single set larger than the cap is rejected with
   `413`, since evicting everything still would not make it fit.
-- `MAX_FISH_SETS = 64` per session, evicting least-recently-created — a cheap
+
+  For that number to mean anything, the store must hold nothing else of size.
+  It keeps metadata plus the index array and **not** the resolved positions:
+  those measured ~111 MB for a 20-genome set at the 5000-positions-per-genome
+  cap, against a 0.38 MB index — a 292× undercount that made the budget
+  decorative and let a session of uploads reach gigabytes while reporting
+  near-zero use. `GET /api/fish/{label}` re-resolves positions on demand.
+  Measured after the change: 0.38 MB held per set, 0.38 MB accounted.
+- `MAX_FISH_SETS = 512` per session, evicting least-recently-created — a cheap
   secondary guard, and the per-session pool removes the cross-session
-  eviction thrash that the global pool had.
+  eviction thrash that the global pool had. It was 64, which silently evicted
+  a user's earliest sets during a session spent uploading previously exported
+  ones (reported from the field); bytes bind first at any realistic set size.
 - `MAX_FISH_SESSIONS = 32`, evicting oldest `last_seen` first.
 - `FISH_SESSION_TTL = 7 days` — sessions idle longer are dropped on the next
   request. Long on purpose: bytes are the real bound, and a short TTL expires
@@ -179,11 +187,19 @@ Implemented in `syntrack/api/fish_store.py` (`FishStore`, `FishSession`),
 
 - **One extra endpoint: `GET /api/fish/{label}`.** §2 assumed the client could
   rebuild its sidebar from `GET /api/fish`, but that returns summaries without
-  positions, which the overlay needs. The stored response already holds the
-  positions, so the getter returns it unchanged — no re-resolution.
+  positions, which the overlay needs. The getter re-resolves the positions
+  from the stored indices (the first cut returned a stored response; keeping
+  those positions is what broke the byte budget, see §4). Output is identical
+  to the create response, which a test asserts.
 - **`413` for an oversize set**, as in §5, and additionally: when the caller's
   own session is the only one left, its oldest sets are shed before the request
   is refused. §4 only described evicting *other* sessions.
+- **Hydration is guarded by a per-label revision counter.** It runs in the
+  background while the user keeps working, so every write it makes is
+  abandoned if that label changed in flight: writing stale IDs would make a
+  later recovery resurrect the *previous* membership, and the failure path
+  would delete a set the user had just re-imported. Both were found in review
+  and are covered by regression tests.
 - **Hydration also backfills each set's SCM IDs** (`GET /api/fish/{label}/scms`,
   in the background after the first render), so a restored set is as
   self-healing as one created in the page. The first cut skipped this, and a

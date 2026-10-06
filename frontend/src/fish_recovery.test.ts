@@ -52,19 +52,29 @@ function makeStore(initial: Record<string, string[]> = {}) {
   }
   const reports: string[] = []
   const seenUsage: (FishUsage | null | undefined)[] = []
+  const revisions = new Map<string, number>()
+  const bump = (l: string) => void revisions.set(l, (revisions.get(l) ?? 0) + 1)
   const store: FishStore = {
     get: (l) => sets.get(l),
-    set: (l, r) => void sets.set(l, r),
+    set: (l, r) => {
+      sets.set(l, r)
+      bump(l)
+    },
     ids: (l) => ids.get(l),
-    setIds: (l, v) => void ids.set(l, v),
+    setIds: (l, v) => {
+      ids.set(l, v)
+      bump(l)
+    },
     drop: (l) => {
       sets.delete(l)
       ids.delete(l)
+      bump(l)
     },
+    revision: (l) => revisions.get(l) ?? 0,
     report: (m) => void reports.push(m),
     setUsage: (u) => void seenUsage.push(u),
   }
-  return { store, sets, ids, reports, seenUsage }
+  return { store, sets, ids, reports, seenUsage, bump }
 }
 
 const notFound = () => new ApiError(404, '/fish/x/scms', 'FISH set not found', 'Not Found')
@@ -281,5 +291,97 @@ describe('budget reporting', () => {
     }))
     await recreateFishSet('s1', store, api)
     expect(seenUsage.at(-1)).toMatchObject({ session_sets: 2 })
+  })
+})
+
+describe('hydration races with the user', () => {
+  /** A deferred promise, so a hydration request can be held open while the
+   *  user re-imports the same label. */
+  /** Pump microtasks until `ready` holds, so the interleaving under test is
+   *  deterministic rather than dependent on how many awaits hydration has
+   *  gone through. */
+  async function until(ready: () => boolean): Promise<void> {
+    for (let i = 0; i < 100 && !ready(); i++) await Promise.resolve()
+    expect(ready()).toBe(true)
+  }
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void
+    let reject!: (e: unknown) => void
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
+  it('does not overwrite IDs of a set re-imported while restoration is in flight', async () => {
+    const { store, ids, bump } = makeStore()
+    api.list = vi.fn(async () => ({ labels: ['s1'], usage: usage() }))
+    const pending = deferred<string[]>()
+    api.scmIds = vi.fn(() => pending.promise)
+
+    const hydrating = hydrateFishSets(store, api)
+    await until(() => vi.mocked(api.scmIds).mock.calls.length > 0)
+
+    // The user re-imports the same label with different membership.
+    store.set('s1', resp('s1'))
+    store.setIds('s1', ['NEW01', 'NEW02'])
+    bump('s1')
+
+    pending.resolve(['OLD01']) // the stale response finally lands
+    await hydrating
+
+    expect(ids.get('s1')).toEqual(['NEW01', 'NEW02'])
+  })
+
+  it('does not drop a set re-imported while its restoration was failing', async () => {
+    const { store, sets, ids, reports, bump } = makeStore()
+    api.list = vi.fn(async () => ({ labels: ['s1'], usage: usage() }))
+    const pending = deferred<string[]>()
+    api.scmIds = vi.fn(() => pending.promise)
+
+    const hydrating = hydrateFishSets(store, api)
+    await until(() => vi.mocked(api.scmIds).mock.calls.length > 0)
+
+    store.set('s1', resp('s1'))
+    store.setIds('s1', ['NEW01'])
+    bump('s1')
+
+    pending.reject(notFound()) // restoration fails after the user's import
+    await hydrating
+
+    expect(sets.has('s1')).toBe(true)
+    expect(ids.get('s1')).toEqual(['NEW01'])
+    expect(reports).toEqual([])
+  })
+
+  it('does not overwrite a set re-imported while its GET was in flight', async () => {
+    const { store, sets, ids, bump } = makeStore()
+    api.list = vi.fn(async () => ({ labels: ['s1'], usage: usage() }))
+    const pending = deferred<FishSetResponse>()
+    api.get = vi.fn(() => pending.promise)
+
+    const hydrating = hydrateFishSets(store, api)
+    await until(() => vi.mocked(api.get).mock.calls.length > 0)
+
+    store.set('s1', resp('s1', '#00ff00'))
+    store.setIds('s1', ['NEW01'])
+    bump('s1')
+
+    pending.resolve(resp('s1', '#ff0000'))
+    await hydrating
+
+    expect(sets.get('s1')?.color).toBe('#00ff00')
+    expect(ids.get('s1')).toEqual(['NEW01'])
+    expect(api.scmIds).not.toHaveBeenCalled()
+  })
+
+  it('still restores labels the user did not touch', async () => {
+    const { store, ids } = makeStore()
+    api.list = vi.fn(async () => ({ labels: ['quiet'], usage: usage() }))
+    api.scmIds = vi.fn(async () => ['OG01'])
+    expect(await hydrateFishSets(store, api)).toEqual(['quiet'])
+    expect(ids.get('quiet')).toEqual(['OG01'])
   })
 })

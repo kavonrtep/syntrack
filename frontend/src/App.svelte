@@ -188,6 +188,12 @@
   // Budget as last reported by the server, shown in the status bar so the
   // user can see headroom while uploading sets.
   let fishUsage = $state<FishUsage | null>(null)
+  // Per-label change counter. Background restoration compares it across its
+  // awaits so it cannot clobber a set the user re-imported meanwhile.
+  const fishRevisions = new Map<string, number>()
+  function bumpFishRevision(label: string): void {
+    fishRevisions.set(label, (fishRevisions.get(label) ?? 0) + 1)
+  }
   let fishLoading = $state(false)
   // Label of the set currently being saved to file (null = none).
   let fishFileSaving = $state<string | null>(null)
@@ -1027,14 +1033,22 @@
   /** The component's three maps, as the store interface fish_recovery wants. */
   const fishStore: FishStore = {
     get: (label) => fishSets.get(label),
-    set: (label, resp) => void fishSets.set(label, resp),
+    set: (label, resp) => {
+      fishSets.set(label, resp)
+      bumpFishRevision(label)
+    },
     ids: (label) => fishSetIds.get(label),
-    setIds: (label, ids) => void fishSetIds.set(label, ids),
+    setIds: (label, ids) => {
+      fishSetIds.set(label, ids)
+      bumpFishRevision(label)
+    },
     drop: (label) => {
       fishSets.delete(label)
       fishVisible.delete(label)
       fishSetIds.delete(label)
+      bumpFishRevision(label)
     },
+    revision: (label) => fishRevisions.get(label) ?? 0,
     report: (message) => {
       error = message
     },

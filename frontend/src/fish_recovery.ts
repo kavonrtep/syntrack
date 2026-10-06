@@ -39,6 +39,10 @@ export type FishStore = {
   report: (message: string) => void
   /** Record the budget snapshot the server returned, for the status bar. */
   setUsage: (usage: FishUsage | null | undefined) => void
+  /** Counter bumped whenever this label's set, IDs or presence change.
+   *  Lets a slow background restore notice that the user changed the same
+   *  label underneath it and bail out instead of clobbering their work. */
+  revision: (label: string) => number
 }
 
 export type FishApi = {
@@ -174,15 +178,28 @@ export async function hydrateFishSets(store: FishStore, api: FishApi): Promise<s
   }
   const restored: string[] = []
   for (const label of labels) {
+    // This runs in the background while the user keeps working, and they may
+    // re-import the very label being restored. Every write below is therefore
+    // guarded by the label's revision: if it moved while a request was in
+    // flight, the user's version is authoritative and this one is abandoned —
+    // writing stale IDs would make a later recovery resurrect the OLD
+    // membership, and dropping would delete the set they just imported.
+    const beforeGet = store.revision(label)
+    let fetched: FishSetResponse
     try {
-      store.set(label, await api.get(label))
+      fetched = await api.get(label)
     } catch {
       continue // gone between the list and the fetch
     }
+    if (store.revision(label) !== beforeGet) continue
+    store.set(label, fetched)
+
+    const beforeIds = store.revision(label)
+    let ids: string[]
     try {
-      store.setIds(label, await api.scmIds(label))
-      restored.push(label)
+      ids = await api.scmIds(label)
     } catch {
+      if (store.revision(label) !== beforeIds) continue
       // The set is on the server but we could not take ownership of it, so it
       // would be unrecoverable later. Drop it while we can still say why.
       store.drop(label)
@@ -190,7 +207,11 @@ export async function hydrateFishSets(store: FishStore, api: FishApi): Promise<s
         `Marker set "${label}" could not be fully restored and was removed. ` +
           `Re-import its SCM-ID file to use it again.`,
       )
+      continue
     }
+    if (store.revision(label) !== beforeIds) continue
+    store.setIds(label, ids)
+    restored.push(label)
   }
   return restored
 }
