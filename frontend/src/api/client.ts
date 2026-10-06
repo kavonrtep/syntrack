@@ -48,15 +48,22 @@ async function request<T>(
       url.searchParams.set(key, String(value))
     }
   }
+  // `init` is spread FIRST and its headers merged explicitly: spreading it
+  // after `headers` would let a caller's `headers` (every POST sends
+  // Content-Type) replace the whole object and silently drop Accept and the
+  // session header — which sent uploads to the shared "default" namespace
+  // while reads looked in this browser's own, so a set could be stored and
+  // then not found.
+  const { headers: callerHeaders, ...rest } = init
   const resp = await fetch(url, {
+    ...rest,
     headers: {
       Accept: 'application/json',
       // Namespaces this browser's FISH marker sets; ignored by every other
       // endpoint (docs/design/FISH_SESSION_SCOPE.md).
       ...sessionHeaders(),
-      ...(init.headers ?? {}),
+      ...(callerHeaders ?? {}),
     },
-    ...init,
   })
   if (!resp.ok) {
     const body = await resp.text()

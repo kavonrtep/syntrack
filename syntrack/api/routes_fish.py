@@ -21,7 +21,12 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 
 from syntrack.api.deps import get_session, get_state
-from syntrack.api.fish_store import FishSetMeta, FishSetTooLargeError, FishUsage
+from syntrack.api.fish_store import (
+    FishSetMeta,
+    FishSetTooLargeError,
+    FishUsage,
+    short_sid,
+)
 from syntrack.api.sampling import subsample_indices
 from syntrack.api.schemas import (
     FishDensityRequest,
@@ -48,7 +53,10 @@ def _not_found(state: AppState, session: str, label: str, op: str) -> HTTPExcept
     remembers recent removals, so the message names the cause (eviction, TTL,
     never existed) instead of leaving the next bug report to guess."""
     reason = state.fish.miss_reason(session, label)
-    logger.warning("fish: miss op=%s label=%r (%s)", op, label, reason)
+    # The requesting session is logged because a miss is often a *mismatch*:
+    # the set exists under another key. Without the sid, a store line and a
+    # miss line cannot be told apart from a genuine eviction.
+    logger.warning("fish: miss op=%s sid=%s label=%r (%s)", op, short_sid(session), label, reason)
     return HTTPException(404, f"FISH set {label!r} not found — {reason}")
 
 
@@ -270,7 +278,8 @@ def fish_density(
         )
     if missing:
         logger.warning(
-            "fish: density missing=%s (%s)",
+            "fish: density sid=%s missing=%s (%s)",
+            short_sid(session),
             missing,
             "; ".join(f"{m}: {state.fish.miss_reason(session, m)}" for m in missing),
         )

@@ -268,6 +268,22 @@ def test_removals_are_logged_with_cause(
     assert any("dropped set" in m and "reason=set cap" in m for m in messages)
 
 
+def test_miss_logs_the_requesting_session(
+    client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A miss is often a session *mismatch*, not an eviction: the set exists
+    under another key. The log must name the asking session so the two can be
+    told apart (this is what identified the dropped-header bug)."""
+    _create(client, "s", ["OG01"], None)  # stored under the default namespace
+    with caplog.at_level("WARNING", logger="syntrack.fish"):
+        client.get("/api/fish/s/scms", headers=A_HDR)
+    misses = [r.message for r in caplog.records if "miss" in r.message]
+    assert misses
+    assert "sid=session-" in misses[0]
+    assert "holds no sets on this server" in misses[0]
+
+
 def test_miss_is_logged_at_warning(
     client: TestClient,
     caplog: pytest.LogCaptureFixture,

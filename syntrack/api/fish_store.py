@@ -33,7 +33,7 @@ REMOVAL_HISTORY = 256
 is gone instead of just reporting it absent. Cheap: a label and a reason."""
 
 
-def _sid(session_key: str) -> str:
+def short_sid(session_key: str) -> str:
     """Short form of a session key for logs — enough to correlate a user's
     requests, short enough to read. The key is opaque, not a secret."""
     return session_key[:8]
@@ -155,7 +155,7 @@ class FishStore:
         self._record_removal(session_key, label, reason, time.monotonic())
         logger.info(
             "fish: dropped set sid=%s label=%r reason=%s freed=%dB sets_left=%d",
-            _sid(session_key),
+            short_sid(session_key),
             label,
             reason,
             freed,
@@ -174,7 +174,7 @@ class FishStore:
             del self._sessions[key]
             logger.info(
                 "fish: expired session sid=%s (idle %.0fs > ttl %.0fs, %d sets, freed %dB)",
-                _sid(key),
+                short_sid(key),
                 idle_s,
                 self._ttl_s,
                 len(session.sets),
@@ -189,7 +189,9 @@ class FishStore:
                 self._evict_oldest(exclude=key, reason="session cap")
             session = FishSession()
             self._sessions[key] = session
-            logger.info("fish: new session sid=%s (sessions=%d)", _sid(key), len(self._sessions))
+            logger.info(
+                "fish: new session sid=%s (sessions=%d)", short_sid(key), len(self._sessions)
+            )
         session.last_seen = now
         return session
 
@@ -210,7 +212,7 @@ class FishStore:
         del self._sessions[victim]
         logger.info(
             "fish: evicted session sid=%s (%s, %d sets, freed %dB, sessions=%d)",
-            _sid(victim),
+            short_sid(victim),
             reason,
             len(session.sets),
             freed,
@@ -240,7 +242,7 @@ class FishStore:
         if needed > self._max_bytes:
             logger.warning(
                 "fish: refused sid=%s label=%r index=%dB over budget=%dB",
-                _sid(session_key),
+                short_sid(session_key),
                 label,
                 needed,
                 self._max_bytes,
@@ -273,7 +275,7 @@ class FishStore:
             logger.info(
                 "fish: stored sid=%s label=%r scms=%d index=%dB replace=%s "
                 "sets=%d total=%dB sessions=%d",
-                _sid(session_key),
+                short_sid(session_key),
                 label,
                 meta.scm_count,
                 needed,
