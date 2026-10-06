@@ -21,7 +21,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 
 from syntrack.api.deps import get_session, get_state
-from syntrack.api.fish_store import FishSetTooLargeError
+from syntrack.api.fish_store import FishSetMeta, FishSetTooLargeError, FishUsage
 from syntrack.api.sampling import subsample_indices
 from syntrack.api.schemas import (
     FishDensityRequest,
@@ -34,6 +34,7 @@ from syntrack.api.schemas import (
     FishSetResponse,
     FishSetSchema,
     FishSetScmsResponse,
+    FishUsageSchema,
 )
 from syntrack.api.state import AppState
 
@@ -49,6 +50,17 @@ def _not_found(state: AppState, session: str, label: str, op: str) -> HTTPExcept
     reason = state.fish.miss_reason(session, label)
     logger.warning("fish: miss op=%s label=%r (%s)", op, label, reason)
     return HTTPException(404, f"FISH set {label!r} not found — {reason}")
+
+
+def _usage_schema(usage: FishUsage) -> FishUsageSchema:
+    return FishUsageSchema(
+        session_sets=usage.session_sets,
+        max_sets=usage.max_sets,
+        session_bytes=usage.session_bytes,
+        total_bytes=usage.total_bytes,
+        max_bytes=usage.max_bytes,
+        sessions=usage.sessions,
+    )
 
 
 def _strand_str(strand: int) -> str:
@@ -67,12 +79,11 @@ def _resolve_indices(scm_ids: list[str], state: AppState) -> np.ndarray:
     return np.unique(np.array(idxs, dtype=np.int32))
 
 
-def _resolve_fish_set(
-    req: FishSetRequest,
+def _resolve_positions(
     scm_arr: np.ndarray,
     state: AppState,
     limit: int = 5000,
-) -> FishSetResponse:
+) -> tuple[dict[str, int], list[FishGenomeCoverage]]:
     """Resolve a FISH set (given its universe-index array) to positions across genomes.
 
     The per-genome ``positions`` feed the on-screen FISH overlay (tick marks).
@@ -82,13 +93,7 @@ def _resolve_fish_set(
     renders equivalently to the live region highlight it came from.
     """
     if scm_arr.size == 0:
-        return FishSetResponse(
-            label=req.label,
-            color=req.color,
-            scm_count=0,
-            genome_coverage={},
-            genomes=[],
-        )
+        return {}, []
 
     universe = state.scm_store.universe
     genome_coverage: dict[str, int] = {}
@@ -132,6 +137,21 @@ def _resolve_fish_set(
             )
         )
 
+    return genome_coverage, genomes
+
+
+def _resolve_fish_set(
+    req: FishSetRequest,
+    scm_arr: np.ndarray,
+    state: AppState,
+    limit: int = 5000,
+) -> FishSetResponse:
+    """Build the full response (metadata + capped, subsampled positions).
+
+    Only the metadata half is stored; the positions are rebuilt on demand, so
+    the byte budget reflects real occupancy (see ``fish_store``).
+    """
+    genome_coverage, genomes = _resolve_positions(scm_arr, state, limit)
     return FishSetResponse(
         label=req.label,
         color=req.color,
@@ -149,8 +169,14 @@ def create_fish_set(
 ) -> FishSetResponse:
     scm_arr = _resolve_indices(req.scm_ids, state)
     result = _resolve_fish_set(req, scm_arr, state)
+    meta = FishSetMeta(
+        label=req.label,
+        color=req.color,
+        scm_count=result.scm_count,
+        genome_coverage=result.genome_coverage,
+    )
     try:
-        state.fish.put(session, req.label, result, scm_arr, replace=req.replace)
+        state.fish.put(session, req.label, meta, scm_arr, replace=req.replace)
     except KeyError as exc:
         raise HTTPException(409, f"FISH set with label {req.label!r} already exists") from exc
     except FishSetTooLargeError as exc:
@@ -159,6 +185,7 @@ def create_fish_set(
             f"marker set {req.label!r} needs {exc.nbytes} bytes of index, "
             f"over the {exc.limit}-byte budget",
         ) from exc
+    result.usage = _usage_schema(state.fish.usage(session))
     return result
 
 
@@ -178,7 +205,7 @@ def list_fish_sets(
         )
         for fs in state.fish.list_sets(session)
     ]
-    return FishListResponse(sets=sets)
+    return FishListResponse(sets=sets, usage=_usage_schema(state.fish.usage(session)))
 
 
 @router.delete("/fish/{label}", status_code=204)
@@ -218,7 +245,7 @@ def fish_density(
             # removed. The client re-creates it from the SCM IDs it kept.
             missing.append(label)
             continue
-        fs, idxs = stored
+        meta, idxs = stored
         genomes_out: dict[str, list[int]] = {}
         max_count = 0
         for genome_id in state.scm_store.genome_ids:
@@ -235,8 +262,8 @@ def fish_density(
         sets_out.append(
             FishDensitySet(
                 label=label,
-                color=fs.color,
-                scm_count=fs.scm_count,
+                color=meta.color,
+                scm_count=meta.scm_count,
                 max_count=max_count,
                 genomes=genomes_out,
             )
@@ -261,7 +288,17 @@ def get_fish_set(
     stored = state.fish.get(session, label)
     if stored is None:
         raise _not_found(state, session, label, "get")
-    return stored[0]
+    meta, idxs = stored
+    # Positions are not stored (they dwarf the index array), so rebuild them.
+    genome_coverage, genomes = _resolve_positions(idxs, state)
+    return FishSetResponse(
+        label=meta.label,
+        color=meta.color,
+        scm_count=meta.scm_count,
+        genome_coverage=genome_coverage or meta.genome_coverage,
+        genomes=genomes,
+        usage=_usage_schema(state.fish.usage(session)),
+    )
 
 
 @router.get("/fish/{label}/scms", response_model=FishSetScmsResponse)

@@ -10,7 +10,7 @@
  */
 
 import { ApiError } from './api/client'
-import type { FishDensityResponse, FishSetResponse } from './api/types'
+import type { FishDensityResponse, FishSetResponse, FishUsage } from './api/types'
 
 /** A set the server no longer has and the client cannot rebuild, because it
  *  never held (or has lost) the SCM IDs behind it. Carries a message that
@@ -37,6 +37,8 @@ export type FishStore = {
   drop: (label: string) => void
   /** Surface why a set disappeared. */
   report: (message: string) => void
+  /** Record the budget snapshot the server returned, for the status bar. */
+  setUsage: (usage: FishUsage | null | undefined) => void
 }
 
 export type FishApi = {
@@ -51,8 +53,8 @@ export type FishApi = {
     labels: string[],
     signal?: AbortSignal,
   ) => Promise<FishDensityResponse>
-  /** Labels this session still has on the server. */
-  list: () => Promise<string[]>
+  /** Labels this session still has on the server, with the budget snapshot. */
+  list: () => Promise<{ labels: string[]; usage: FishUsage }>
   /** One stored set, positions included. */
   get: (label: string) => Promise<FishSetResponse>
   /** A stored set's complete SCM IDs. */
@@ -81,7 +83,9 @@ export async function recreateFishSet(
     return false
   }
   try {
-    store.set(label, await api.create(ids, label, existing.color, true))
+    const resp = await api.create(ids, label, existing.color, true)
+    store.set(label, resp)
+    store.setUsage(resp.usage)
     return true
   } catch (err) {
     store.drop(label)
@@ -125,6 +129,7 @@ export async function createFishSet(
   }
   store.set(label, resp)
   store.setIds(label, ids)
+  store.setUsage(resp.usage)
   return resp
 }
 
@@ -161,7 +166,9 @@ export async function fishDensityRecovering(
 export async function hydrateFishSets(store: FishStore, api: FishApi): Promise<string[]> {
   let labels: string[]
   try {
-    labels = await api.list()
+    const listed = await api.list()
+    labels = listed.labels
+    store.setUsage(listed.usage)
   } catch {
     return []
   }

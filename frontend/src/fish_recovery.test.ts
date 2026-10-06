@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from './api/client'
-import type { FishDensityResponse, FishSetResponse } from './api/types'
+import type { FishDensityResponse, FishSetResponse, FishUsage } from './api/types'
 import {
   createFishSet,
   FishSetLostError,
@@ -12,6 +12,17 @@ import {
   type FishApi,
   type FishStore,
 } from './fish_recovery'
+
+function usage(sets = 1, bytes = 4): FishUsage {
+  return {
+    session_sets: sets,
+    max_sets: 512,
+    session_bytes: bytes,
+    total_bytes: bytes,
+    max_bytes: 128 * 1024 * 1024,
+    sessions: 1,
+  }
+}
 
 function resp(label: string, color = '#ff0000'): FishSetResponse {
   return { label, color, scm_count: 2, genome_coverage: {}, genomes: [] }
@@ -40,6 +51,7 @@ function makeStore(initial: Record<string, string[]> = {}) {
     ids.set(label, idList)
   }
   const reports: string[] = []
+  const seenUsage: (FishUsage | null | undefined)[] = []
   const store: FishStore = {
     get: (l) => sets.get(l),
     set: (l, r) => void sets.set(l, r),
@@ -50,8 +62,9 @@ function makeStore(initial: Record<string, string[]> = {}) {
       ids.delete(l)
     },
     report: (m) => void reports.push(m),
+    setUsage: (u) => void seenUsage.push(u),
   }
-  return { store, sets, ids, reports }
+  return { store, sets, ids, reports, seenUsage }
 }
 
 const notFound = () => new ApiError(404, '/fish/x/scms', 'FISH set not found', 'Not Found')
@@ -63,7 +76,7 @@ beforeEach(() => {
   api = {
     create: vi.fn(async (_ids, label) => resp(label)),
     density: vi.fn(async (_bins, labels) => density(labels)),
-    list: vi.fn(async () => []),
+    list: vi.fn(async () => ({ labels: [] as string[], usage: usage(0, 0) })),
     get: vi.fn(async (label) => resp(label)),
     scmIds: vi.fn(async () => ['OG01']),
   }
@@ -193,7 +206,7 @@ describe('fishDensityRecovering', () => {
 describe('hydrateFishSets', () => {
   it('restores each set together with the SCM IDs needed to re-assert it', async () => {
     const { store, sets, ids } = makeStore()
-    api.list = vi.fn(async () => ['s1', 's2'])
+    api.list = vi.fn(async () => ({ labels: ['s1', 's2'], usage: usage() }))
     api.scmIds = vi.fn(async (label: string) => [`${label}-OG01`])
     expect(await hydrateFishSets(store, api)).toEqual(['s1', 's2'])
     expect([...sets.keys()]).toEqual(['s1', 's2'])
@@ -202,7 +215,7 @@ describe('hydrateFishSets', () => {
 
   it('a hydrated set is then self-healing (the v0.5.0 gap)', async () => {
     const { store } = makeStore()
-    api.list = vi.fn(async () => ['s1'])
+    api.list = vi.fn(async () => ({ labels: ['s1'], usage: usage() }))
     await hydrateFishSets(store, api)
     // Server loses the set; the next operation must recover rather than fail.
     const op = vi.fn()
@@ -212,7 +225,7 @@ describe('hydrateFishSets', () => {
 
   it('drops a set whose IDs cannot be fetched instead of leaving a dead entry', async () => {
     const { store, sets, reports } = makeStore()
-    api.list = vi.fn(async () => ['s1'])
+    api.list = vi.fn(async () => ({ labels: ['s1'], usage: usage() }))
     api.scmIds = vi.fn(async () => {
       throw notFound()
     })
@@ -223,7 +236,7 @@ describe('hydrateFishSets', () => {
 
   it('skips a set that vanishes between the list and the fetch', async () => {
     const { store, sets } = makeStore()
-    api.list = vi.fn(async () => ['gone', 'ok'])
+    api.list = vi.fn(async () => ({ labels: ['gone', 'ok'], usage: usage() }))
     api.get = vi.fn(async (label: string) => {
       if (label === 'gone') throw notFound()
       return resp(label)
@@ -239,5 +252,34 @@ describe('hydrateFishSets', () => {
     })
     expect(await hydrateFishSets(store, api)).toEqual([])
     expect(reports).toEqual([])
+  })
+})
+
+describe('budget reporting', () => {
+  it('records the budget the server returns when a set is created', async () => {
+    const { store, seenUsage } = makeStore()
+    api.create = vi.fn(async (_ids: string[], label: string) => ({
+      ...resp(label),
+      usage: usage(3, 1024),
+    }))
+    await createFishSet(['OG01'], 's1', '#ff0000', store, api)
+    expect(seenUsage.at(-1)).toMatchObject({ session_sets: 3, session_bytes: 1024 })
+  })
+
+  it('records the budget on hydration', async () => {
+    const { store, seenUsage } = makeStore()
+    api.list = vi.fn(async () => ({ labels: ['s1'], usage: usage(7, 2048) }))
+    await hydrateFishSets(store, api)
+    expect(seenUsage[0]).toMatchObject({ session_sets: 7, session_bytes: 2048 })
+  })
+
+  it('records the budget after a set is re-asserted', async () => {
+    const { store, seenUsage } = makeStore({ s1: ['OG01'] })
+    api.create = vi.fn(async (_ids: string[], label: string) => ({
+      ...resp(label),
+      usage: usage(2, 512),
+    }))
+    await recreateFishSet('s1', store, api)
+    expect(seenUsage.at(-1)).toMatchObject({ session_sets: 2 })
   })
 })

@@ -2,9 +2,12 @@
 
 One ``syntrack serve`` process is shared by several browsers, so marker sets
 are namespaced by an opaque session key rather than living in one global dict.
-The store is bounded by *bytes* — an index array is ``int32`` per member SCM,
-so set counts understate memory by an order of magnitude — and evicts whole
-idle sessions when it does not fit.
+The store keeps only each set's *metadata* and its ``int32`` index array —
+roughly 4 bytes per member SCM. It deliberately does not keep the resolved
+per-genome positions: those are ~111 MB for a set spanning 20 genomes at the
+5000-positions-per-genome cap, which dwarfs the 0.4 MB index and made the byte
+budget meaningless. ``GET /api/fish/{label}`` re-resolves them on demand
+instead, so the budget below bounds what it says it bounds.
 
 The store is the only mutable state the API owns, and FastAPI dispatches the
 synchronous route handlers to a thread pool, so every public method takes the
@@ -23,8 +26,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import numpy as np
 
-    from syntrack.api.schemas import FishSetResponse
-
 logger = logging.getLogger("syntrack.fish")
 
 REMOVAL_HISTORY = 256
@@ -41,8 +42,13 @@ def _sid(session_key: str) -> str:
 MAX_FISH_BYTES = 128 * 1024 * 1024
 """Total ``nbytes`` of all stored index arrays, across all sessions."""
 
-MAX_FISH_SETS = 64
-"""Sets per session (secondary guard; bytes are authoritative)."""
+MAX_FISH_SETS = 512
+"""Sets per session (secondary guard; bytes are authoritative).
+
+Generous on purpose: a working session can involve uploading many previously
+exported sets, and evicting the earliest ones mid-session is exactly the
+surprise this cap used to cause when it was 64. At ~4 bytes per member SCM the
+byte budget binds first for any realistic set size."""
 
 MAX_FISH_SESSIONS = 32
 """Concurrent sessions (secondary guard)."""
@@ -57,10 +63,36 @@ gone — which is a worse failure than holding a few megabytes longer."""
 
 
 @dataclass(slots=True)
+class FishSetMeta:
+    """What the store keeps about a set besides its index array.
+
+    Everything here is small and fixed-size per set. The positions that feed
+    the overlay are NOT kept; they are re-resolved from the indices on demand.
+    """
+
+    label: str
+    color: str
+    scm_count: int
+    genome_coverage: dict[str, int]
+
+
+@dataclass(slots=True)
+class FishUsage:
+    """Budget snapshot, for the status bar and for capacity logging."""
+
+    session_sets: int
+    max_sets: int
+    session_bytes: int
+    total_bytes: int
+    max_bytes: int
+    sessions: int
+
+
+@dataclass(slots=True)
 class FishSession:
     """One session's marker sets, in creation order (the eviction order)."""
 
-    sets: dict[str, FishSetResponse] = field(default_factory=dict)
+    sets: dict[str, FishSetMeta] = field(default_factory=dict)
     indices: dict[str, np.ndarray] = field(default_factory=dict)
     last_seen: float = 0.0
 
@@ -192,7 +224,7 @@ class FishStore:
         self,
         session_key: str,
         label: str,
-        result: FishSetResponse,
+        meta: FishSetMeta,
         indices: np.ndarray,
         *,
         replace: bool,
@@ -236,20 +268,30 @@ class FishStore:
                     self._drop_set(
                         session_key, session, next(iter(session.sets)), "byte cap (own session)"
                     )
-            session.sets[label] = result
+            session.sets[label] = meta
             session.indices[label] = indices
             logger.info(
                 "fish: stored sid=%s label=%r scms=%d index=%dB replace=%s "
                 "sets=%d total=%dB sessions=%d",
                 _sid(session_key),
                 label,
-                result.scm_count,
+                meta.scm_count,
                 needed,
                 req_replace,
                 len(session.sets),
                 self._total_bytes(),
                 len(self._sessions),
             )
+            total = self._total_bytes()
+            if total > self._max_bytes // 2:
+                logger.warning(
+                    "fish: budget %d%% used (%dB of %dB across %d session(s)) — "
+                    "further uploads will evict older sets",
+                    round(100 * total / self._max_bytes),
+                    total,
+                    self._max_bytes,
+                    len(self._sessions),
+                )
 
     def miss_reason(self, session_key: str, label: str) -> str:
         """Why ``label`` is not in ``session_key``, in words, for the 404 detail
@@ -272,7 +314,20 @@ class FishStore:
                 f"server holds {len(self._sessions)} session(s), {self._total_bytes()}B of indices"
             )
 
-    def get(self, session_key: str, label: str) -> tuple[FishSetResponse, np.ndarray] | None:
+    def usage(self, session_key: str) -> FishUsage:
+        """Budget snapshot for this session (and the shared byte total)."""
+        with self._lock:
+            session = self._sessions.get(session_key)
+            return FishUsage(
+                session_sets=len(session.sets) if session else 0,
+                max_sets=self._max_sets,
+                session_bytes=session.nbytes if session else 0,
+                total_bytes=self._total_bytes(),
+                max_bytes=self._max_bytes,
+                sessions=len(self._sessions),
+            )
+
+    def get(self, session_key: str, label: str) -> tuple[FishSetMeta, np.ndarray] | None:
         """The set and its index array, read as a pair so they cannot disagree."""
         now = time.monotonic()
         with self._lock:
@@ -297,7 +352,7 @@ class FishStore:
             session.last_seen = now
             return list(session.sets)
 
-    def list_sets(self, session_key: str) -> list[FishSetResponse]:
+    def list_sets(self, session_key: str) -> list[FishSetMeta]:
         now = time.monotonic()
         with self._lock:
             self._expire(now)

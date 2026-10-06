@@ -13,7 +13,7 @@ import threading
 
 from fastapi.testclient import TestClient
 
-from syntrack.api.fish_store import MAX_FISH_SETS
+from syntrack.api.fish_store import FishStore
 from syntrack.api.routes_fish import _resolve_fish_set, _resolve_indices, create_fish_set
 from syntrack.api.schemas import FishSetRequest
 from syntrack.api.state import AppState
@@ -130,18 +130,20 @@ def test_duplicate_label_replace_overwrites(client: TestClient) -> None:
     assert client.get("/api/fish/dup/scms").json()["scm_ids"] == ["OG02", "OG03"]
 
 
-def test_fish_set_store_is_capped(client: TestClient) -> None:
-    """A shared process must not grow without bound; the oldest set is evicted."""
-    for n in range(MAX_FISH_SETS + 3):
+def test_fish_set_store_is_capped(client: TestClient, app_state: AppState) -> None:
+    """A session must not grow without bound; the oldest set is evicted."""
+    cap = 8
+    app_state.fish = FishStore(max_sets=cap)
+    for n in range(cap + 3):
         resp = client.post(
             "/api/fish",
             json={"scm_ids": ["OG01"], "label": f"set{n:03d}", "color": "#FF0000"},
         )
         assert resp.status_code == 201
     labels = [s["label"] for s in client.get("/api/fish").json()["sets"]]
-    assert len(labels) == MAX_FISH_SETS
+    assert len(labels) == cap
     assert "set000" not in labels
-    assert f"set{MAX_FISH_SETS + 2:03d}" in labels
+    assert f"set{cap + 2:03d}" in labels
 
 
 def test_concurrent_creates_keep_the_two_stores_consistent(app_state: AppState) -> None:
@@ -156,6 +158,9 @@ def test_concurrent_creates_keep_the_two_stores_consistent(app_state: AppState) 
     unlocked version fail every run — so this asserts the post-condition
     rather than relying on hitting the race.
     """
+    # Own store with a small cap, so eviction is exercised regardless of what
+    # the production MAX_FISH_SETS happens to be.
+    app_state.fish = FishStore(max_sets=8)
     n_threads = 16
     barrier = threading.Barrier(n_threads)
     errors: list[Exception] = []
@@ -180,7 +185,7 @@ def test_concurrent_creates_keep_the_two_stores_consistent(app_state: AppState) 
         list(pool.map(create, range(n_threads)))
 
     assert not errors, errors[:3]
-    assert len(app_state.fish.labels("shared-session")) == MAX_FISH_SETS
+    assert len(app_state.fish.labels("shared-session")) == 8
 
 
 def test_list_fish_sets(client: TestClient) -> None:

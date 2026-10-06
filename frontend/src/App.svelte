@@ -8,6 +8,7 @@
     ConfigResponse,
     FishDensityResponse,
     FishSetResponse,
+    FishUsage,
     Genome,
     HighlightResponse,
     PaintRegion,
@@ -184,6 +185,9 @@
   // restart, so we keep the IDs and re-assert the set when the server has
   // forgotten it (404) or another session took the label (409).
   const fishSetIds = new Map<string, string[]>()
+  // Budget as last reported by the server, shown in the status bar so the
+  // user can see headroom while uploading sets.
+  let fishUsage = $state<FishUsage | null>(null)
   let fishLoading = $state(false)
   // Label of the set currently being saved to file (null = none).
   let fishFileSaving = $state<string | null>(null)
@@ -1034,12 +1038,18 @@
     report: (message) => {
       error = message
     },
+    setUsage: (usage) => {
+      if (usage) fishUsage = usage
+    },
   }
 
   const fishApi: FishApi = {
     create: (ids, label, color, replace) => api.fishCreate(ids, label, color, replace),
     density: (bins, labels, signal) => api.fishDensity(bins, labels, signal),
-    list: async () => (await api.fishList()).sets.map((s) => s.label),
+    list: async () => {
+      const resp = await api.fishList()
+      return { labels: resp.sets.map((s) => s.label), usage: resp.usage }
+    },
     get: (label) => api.fishGet(label),
     scmIds: async (label) => (await api.fishScms(label)).scm_ids,
   }
@@ -1059,6 +1069,12 @@
       // Best-effort server cleanup — remove locally regardless.
     }
     fishStore.drop(label)
+    // 204 carries no body, so re-read the budget rather than guess at it.
+    try {
+      fishUsage = (await api.fishList()).usage
+    } catch {
+      // Leave the last known figures; the next upload refreshes them.
+    }
   }
 
   function toggleFishSet(label: string): void {
@@ -1325,6 +1341,20 @@
 
   // ----------------------------- Status helpers --------------------------
 
+  /** "marker sets 12/512 · 4.6 MB of 128 MB (3 sessions)" — headroom while
+   *  uploading. The byte budget is shared by every browser on this server, so
+   *  the other sessions are named when there are any. */
+  function fmtFishUsage(u: FishUsage): string {
+    const mb = (b: number) => `${(b / 1024 / 1024).toFixed(1)} MB`
+    const shared = u.sessions > 1 ? `, ${u.sessions} sessions share the budget` : ''
+    const pct = u.max_bytes > 0 ? Math.round((100 * u.total_bytes) / u.max_bytes) : 0
+    const warn = pct >= 50 ? ' ⚠' : ''
+    return (
+      `marker sets ${u.session_sets}/${u.max_sets} · ` +
+      `${mb(u.total_bytes)} of ${mb(u.max_bytes)} used (${pct}%${shared})${warn}`
+    )
+  }
+
   let statusLine = $derived.by(() => {
     if (!allGenomes || genomesInOrder.length === 0) return 'no genomes selected'
     const anchor = genomesInOrder[0]
@@ -1340,6 +1370,9 @@
       `(${(bpPerPx / 1000).toFixed(1)} kb/px, zoom ${vp.zoom.toFixed(1)}×, LOD: ${lodModeValue}, ${scope})`
     let line = base
     if (lastAlignmentSummary) line += `  ·  ${lastAlignmentSummary}`
+    if (fishUsage) {
+      line += `  ·  ${fmtFishUsage(fishUsage)}`
+    }
     if (highlightResult) {
       const src = highlightResult.source
       const totalMatches = highlightResult.targets.reduce((s, t) => s + t.scm_count, 0)

@@ -179,9 +179,22 @@ export type FishSetSummary = {
 
 export type FishSetResponse = FishSetSummary & {
   genomes: FishGenomeCoverage[]
+  /** Budget snapshot after the call that returned this set (create/get). */
+  usage?: FishUsage | null
 }
 
-export type FishListResponse = { sets: FishSetSummary[] }
+/** Marker-set budget, as reported by the server (shared byte budget across
+ *  sessions; set count is per session). */
+export type FishUsage = {
+  session_sets: number
+  max_sets: number
+  session_bytes: number
+  total_bytes: number
+  max_bytes: number
+  sessions: number
+}
+
+export type FishListResponse = { sets: FishSetSummary[]; usage: FishUsage }
 
 export type FishDensitySet = {
   label: string

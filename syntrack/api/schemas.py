@@ -284,10 +284,29 @@ class FishSetResponse(FishSetSchema):
     """Full FISH set with per-genome positions."""
 
     genomes: list[FishGenomeCoverage]
+    usage: FishUsageSchema | None = None
+    """Budget snapshot after this call. Present on create, so the status bar
+    updates as sets are uploaded."""
+
+
+class FishUsageSchema(_Schema):
+    """How much of the marker-set budget is in use, for the status bar.
+
+    ``session_*`` is the calling browser's own share; ``total_bytes`` covers
+    every session on the server, since the byte budget is shared.
+    """
+
+    session_sets: int
+    max_sets: int
+    session_bytes: int
+    total_bytes: int
+    max_bytes: int
+    sessions: int
 
 
 class FishListResponse(_Schema):
     sets: list[FishSetSchema]
+    usage: FishUsageSchema
 
 
 # ------------------------------ /api/fish/density --------------------------

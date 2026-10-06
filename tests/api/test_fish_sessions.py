@@ -289,3 +289,76 @@ def test_session_keys_are_abbreviated_in_logs(
     joined = "\n".join(r.message for r in caplog.records)
     assert "sid=01234567 " in joined
     assert long_id not in joined
+
+
+# --------------------------- budget accounting ------------------------------
+
+
+def test_store_keeps_only_metadata_and_indices(client: TestClient, app_state: AppState) -> None:
+    """Positions must NOT be retained: they are ~300x the index array, which is
+    what made the byte budget meaningless (fixed after the field report)."""
+    _create(client, "s", ["OG01", "OG02"], A_HDR)
+    stored = app_state.fish.get("session-a", "s")
+    assert stored is not None
+    meta, idxs = stored
+    assert meta.scm_count == 2
+    assert idxs.dtype == np.int32
+    # The stored object has no positions attribute at all.
+    assert not hasattr(meta, "genomes")
+    assert not hasattr(meta, "positions")
+    # Accounted bytes are the index array, and nothing hidden alongside it.
+    assert app_state.fish.usage("session-a").session_bytes == idxs.nbytes
+
+
+def test_get_rebuilds_positions_on_demand(client: TestClient) -> None:
+    """Dropping stored positions must not change what the client receives."""
+    created = _create(client, "s", ["OG01", "OG02"], A_HDR).json()
+    fetched = client.get("/api/fish/s", headers=A_HDR).json()
+    assert fetched["scm_count"] == created["scm_count"]
+    assert fetched["genome_coverage"] == created["genome_coverage"]
+    created_pos = {
+        g["genome_id"]: [(p["scm_id"], p["start"]) for p in g["positions"]]
+        for g in created["genomes"]
+    }
+    fetched_pos = {
+        g["genome_id"]: [(p["scm_id"], p["start"]) for p in g["positions"]]
+        for g in fetched["genomes"]
+    }
+    assert fetched_pos == created_pos
+
+
+def test_usage_is_reported_on_create_and_list(client: TestClient) -> None:
+    created = _create(client, "s1", ["OG01", "OG02"], A_HDR).json()
+    usage = created["usage"]
+    assert usage["session_sets"] == 1
+    assert usage["session_bytes"] == 8  # 2 x int32
+    assert usage["max_bytes"] > 0
+    assert usage["sessions"] >= 1
+
+    _create(client, "s2", ["OG03"], A_HDR)
+    listed = client.get("/api/fish", headers=A_HDR).json()["usage"]
+    assert listed["session_sets"] == 2
+    assert listed["session_bytes"] == 12
+    assert listed["total_bytes"] >= listed["session_bytes"]
+
+
+def test_usage_counts_only_the_callers_sets(client: TestClient) -> None:
+    _create(client, "a", ["OG01", "OG02"], A_HDR)
+    _create(client, "b", ["OG03"], B_HDR)
+    a_usage = client.get("/api/fish", headers=A_HDR).json()["usage"]
+    assert a_usage["session_sets"] == 1
+    assert a_usage["session_bytes"] == 8
+    # The byte budget is shared, so the total exceeds this session's share.
+    assert a_usage["total_bytes"] == 12
+    assert a_usage["sessions"] == 2
+
+
+def test_warns_once_the_shared_budget_is_half_used(
+    client: TestClient,
+    app_state: AppState,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app_state.fish = FishStore(max_bytes=16)  # 4 int32 entries
+    with caplog.at_level("WARNING", logger="syntrack.fish"):
+        _create(client, "s", ["OG01", "OG02", "OG03"], A_HDR)
+    assert any("budget" in r.message and "used" in r.message for r in caplog.records)

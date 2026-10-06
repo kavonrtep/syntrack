@@ -138,8 +138,17 @@ bytes:
 | Two tabs, same browser | Same session, same sets (`localStorage`) |
 | Single set larger than `MAX_FISH_BYTES` | `413`, with the byte size in the detail; evicting other sessions would not help |
 
-Logged at DEBUG: session creation, eviction (with reason and freed bytes),
-and re-assertion of an unknown label. Nothing is logged per request.
+Logged on the `syntrack.fish` logger at INFO: session creation, set stored
+(label, SCM count, index bytes, occupancy), set dropped with its cause,
+session evicted or expired. At WARNING: a miss, an oversize set, and the
+shared budget passing half. The store remembers its last 256 removals, so
+`FishStore.miss_reason` can distinguish "removed 38s ago: set cap (512)" from
+"this session never held that label"; that text goes into the 404 detail, so
+a pasted error carries its own diagnosis. Session keys appear as an 8-character
+prefix — enough to correlate one user's requests, without the full key.
+
+The budget is reported to the client on create and list (`usage`), and shown
+in the status bar while sets are uploaded.
 
 ## 6. Test strategy
 
