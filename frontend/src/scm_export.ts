@@ -2,6 +2,8 @@
 // per-marker-set "save to file" action so they produce an identical, reloadable
 // TSV: scm_id, present_in (genome count), then one 0/1 column per loaded genome.
 
+import type { HighlightResponse } from './api/types'
+
 /** Build the SCM presence-matrix TSV. `presence` maps each scm_id to the set of
  *  genome ids it occurs in; `genomeIds` fixes the column order. */
 export function buildPresenceTsv(
@@ -52,6 +54,26 @@ export function downloadTextFile(
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
+}
+
+/** Presence map for a highlight's SCM-ID export.
+ *
+ *  The source genome contains every SCM by definition; a target genome
+ *  contains one iff it appears in that target's positions. Requires the
+ *  response to be uncapped (``limit=0``), or the target columns would read 0
+ *  for SCMs that were merely subsampled out of the overlay.
+ */
+export function presenceFromHighlight(resp: HighlightResponse): Map<string, Set<string>> {
+  const presence = new Map<string, Set<string>>()
+  for (const id of resp.source.scm_ids) presence.set(id, new Set([resp.source.genome_id]))
+  for (const target of resp.targets) {
+    for (const pos of target.positions) {
+      // A target SCM outside the source list cannot happen for a region
+      // highlight; ignore rather than invent a row for it.
+      presence.get(pos.scm_id)?.add(target.genome_id)
+    }
+  }
+  return presence
 }
 
 /** Sanitize a label for use in a filename. Runs of unsafe characters collapse

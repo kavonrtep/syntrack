@@ -75,3 +75,21 @@ describe('session header', () => {
     expect(headersOf(calls[0].init)[SESSION_HEADER]).toBe(sessionId())
   })
 })
+
+describe('highlight export request', () => {
+  it('sends limit=0 rather than dropping it as falsy', async () => {
+    // The uncapped fetch behind the "↓ SCM IDs" button. request() skips
+    // undefined/null params; 0 must survive, or the export would silently
+    // download the capped (subsampled) overlay set instead of the full one.
+    await api.highlight('g1', 'chr1:0-1000', { limit: 0 })
+    const url = new URL(calls[0].url)
+    expect(url.searchParams.get('limit')).toBe('0')
+    expect(url.searchParams.get('genome_id')).toBe('g1')
+    expect(url.searchParams.get('region')).toBe('chr1:0-1000')
+  })
+
+  it('omits limit when the caller does not ask for one', async () => {
+    await api.highlight('g1', 'chr1:0-1000')
+    expect(new URL(calls[0].url).searchParams.has('limit')).toBe(false)
+  })
+})

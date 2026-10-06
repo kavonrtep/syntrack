@@ -49,6 +49,7 @@
     buildPresenceTsv,
     downloadTextFile,
     presenceFromBitstrings,
+    presenceFromHighlight,
     safeFilenamePart,
   } from './scm_export'
   import { fmtBp } from './canvas/format'
@@ -945,21 +946,10 @@
     const ids = src.scm_ids
     if (ids.length === 0) return
 
-    // Build per-SCM presence map across every loaded genome. Source is
-    // present by definition; targets are present iff scm_id appears in
-    // their positions list.
-    const presence = new Map<string, Set<string>>()
-    for (const id of ids) presence.set(id, new Set([src.genome_id]))
-    for (const target of full.targets) {
-      for (const pos of target.positions) {
-        presence.get(pos.scm_id)?.add(target.genome_id)
-      }
-    }
-
     // allGenomes (server order) keeps the column layout stable across
     // reorder/visibility changes.
     const genomeIds = allGenomes.map((g) => g.id)
-    const tsv = buildPresenceTsv(ids, presence, genomeIds)
+    const tsv = buildPresenceTsv(ids, presenceFromHighlight(full), genomeIds)
     const safeSeq = safeFilenamePart(src.seq)
     downloadTextFile(tsv, `syntrack_${src.genome_id}_${safeSeq}_${src.start}-${src.end}_scm_ids.tsv`)
   }
@@ -1355,6 +1345,18 @@
 
   // ----------------------------- Status helpers --------------------------
 
+  /** Full name plus size, for the sidebar tooltip. Set names are long (a
+   *  region plus its genome) and the row truncates them with an ellipsis, so
+   *  hovering is the only way to read one in full. */
+  function fishSetTooltip(label: string, fs: FishSetResponse): string {
+    const covered = Object.values(fs.genome_coverage).filter((n) => n > 0).length
+    const total = allGenomes?.length ?? covered
+    return (
+      `${label}\n${fs.scm_count.toLocaleString()} SCM${fs.scm_count === 1 ? '' : 's'}` +
+      ` · present in ${covered} of ${total} genome${total === 1 ? '' : 's'}`
+    )
+  }
+
   /** "marker sets 12/512 · 4.6 MB of 128 MB (3 sessions)" — headroom while
    *  uploading. The byte budget is shared by every browser on this server, so
    *  the other sessions are named when there are any. */
@@ -1524,7 +1526,7 @@
             checked={isVisible(g.id)}
             onchange={() => toggleVisible(g.id)}
           />
-          <span class="toggle-label">{g.label}</span>
+          <span class="toggle-label" title={g.label}>{g.label}</span>
           <span class="toggle-meta">{g.scm_count.toLocaleString()}</span>
           {#if highlightResult}
             <span
@@ -1587,7 +1589,7 @@
             onchange={() => toggleFishSet(label)}
           />
           <span class="fish-swatch" style:background={fs.color}></span>
-          <span class="toggle-label">{label}</span>
+          <span class="toggle-label" title={fishSetTooltip(label, fs)}>{label}</span>
           <span class="toggle-meta">{fs.scm_count.toLocaleString()}</span>
           <button
             class="fish-save"
