@@ -57,6 +57,7 @@
   import {
     createFishSet as createFishSetRecovering,
     fishDensityRecovering,
+    hydrateFishSets,
     withFishRetry,
     type FishApi,
     type FishStore,
@@ -241,31 +242,10 @@
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     }
-    await hydrateFishSets()
+    // Not awaited: the sets are restored in the background, so a slow
+    // backfill of large sets never holds up the first render.
+    void hydrateFishSets(fishStore, fishApi)
   })
-
-  /** Rebuild the marker-set sidebar from the sets this session still holds on
-   *  the server, so a page reload does not lose them (and does not then
-   *  collide with them on re-import). Sets come back unticked: which ones were
-   *  visible is not server state. Their SCM IDs are not recoverable this way,
-   *  so a set hydrated here cannot be self-healed after a later restart — it
-   *  is dropped with a message instead. Failure is silent: an empty sidebar is
-   *  the old behaviour, not an error worth a banner. */
-  async function hydrateFishSets(): Promise<void> {
-    let labels: string[]
-    try {
-      labels = (await api.fishList()).sets.map((s) => s.label)
-    } catch {
-      return
-    }
-    for (const label of labels) {
-      try {
-        fishSets.set(label, await api.fishGet(label))
-      } catch {
-        // Gone between the list and the fetch — nothing to restore.
-      }
-    }
-  }
 
   $effect(() => {
     if (!containerEl) return
@@ -1045,6 +1025,7 @@
     get: (label) => fishSets.get(label),
     set: (label, resp) => void fishSets.set(label, resp),
     ids: (label) => fishSetIds.get(label),
+    setIds: (label, ids) => void fishSetIds.set(label, ids),
     drop: (label) => {
       fishSets.delete(label)
       fishVisible.delete(label)
@@ -1058,6 +1039,9 @@
   const fishApi: FishApi = {
     create: (ids, label, color, replace) => api.fishCreate(ids, label, color, replace),
     density: (bins, labels, signal) => api.fishDensity(bins, labels, signal),
+    list: async () => (await api.fishList()).sets.map((s) => s.label),
+    get: (label) => api.fishGet(label),
+    scmIds: async (label) => (await api.fishScms(label)).scm_ids,
   }
 
   async function createFishSet(
@@ -1065,9 +1049,7 @@
     label: string,
     color: string,
   ): Promise<FishSetResponse> {
-    const resp = await createFishSetRecovering(ids, label, color, fishStore, fishApi)
-    fishSetIds.set(label, ids)
-    return resp
+    return await createFishSetRecovering(ids, label, color, fishStore, fishApi)
   }
 
   async function deleteFishSet(label: string): Promise<void> {

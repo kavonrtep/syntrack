@@ -12,12 +12,27 @@
 import { ApiError } from './api/client'
 import type { FishDensityResponse, FishSetResponse } from './api/types'
 
+/** A set the server no longer has and the client cannot rebuild, because it
+ *  never held (or has lost) the SCM IDs behind it. Carries a message that
+ *  says what to do, instead of the stale 404 that triggered it. */
+export class FishSetLostError extends Error {
+  constructor(readonly label: string) {
+    super(
+      `Marker set "${label}" is no longer on the server and could not be restored ` +
+        `(the server restarted, or the session expired). Re-import its SCM-ID file to recreate it.`,
+    )
+    this.name = 'FishSetLostError'
+  }
+}
+
 export type FishStore = {
   get: (label: string) => FishSetResponse | undefined
   /** Record a (re-)created set. */
   set: (label: string, resp: FishSetResponse) => void
   /** The SCM IDs this client created the set from, if still known. */
   ids: (label: string) => string[] | undefined
+  /** Remember the SCM IDs behind a set, so it can be re-asserted later. */
+  setIds: (label: string, ids: string[]) => void
   /** Forget the set entirely (sets, visibility and IDs together). */
   drop: (label: string) => void
   /** Surface why a set disappeared. */
@@ -36,6 +51,12 @@ export type FishApi = {
     labels: string[],
     signal?: AbortSignal,
   ) => Promise<FishDensityResponse>
+  /** Labels this session still has on the server. */
+  list: () => Promise<string[]>
+  /** One stored set, positions included. */
+  get: (label: string) => Promise<FishSetResponse>
+  /** A stored set's complete SCM IDs. */
+  scmIds: (label: string) => Promise<string[]>
 }
 
 function hasStatus(err: unknown, status: number): boolean {
@@ -81,7 +102,7 @@ export async function withFishRetry<T>(
     return await op()
   } catch (err) {
     if (!hasStatus(err, 404)) throw err
-    if (!(await recreateFishSet(label, store, api))) throw err
+    if (!(await recreateFishSet(label, store, api))) throw new FishSetLostError(label)
     return await op()
   }
 }
@@ -103,6 +124,7 @@ export async function createFishSet(
     resp = await api.create(ids, label, color, true)
   }
   store.set(label, resp)
+  store.setIds(label, ids)
   return resp
 }
 
@@ -124,4 +146,44 @@ export async function fishDensityRecovering(
   const remaining = labels.filter((l) => store.get(l) !== undefined)
   if (!restored || remaining.length === 0) return resp
   return await api.density(bins, remaining, signal)
+}
+
+/** Rebuild the sidebar from the sets this session still has on the server.
+ *
+ *  Each set's SCM IDs are fetched too: without them a restored set cannot be
+ *  re-asserted later, so a server restart would turn it into a dead entry
+ *  that fails on first use. A set that has already vanished by the time we
+ *  ask for its IDs is dropped now, not left to fail later.
+ *
+ *  Returns the labels that were restored. Failure to reach the server at all
+ *  is not an error — an empty sidebar is the pre-hydration behaviour.
+ */
+export async function hydrateFishSets(store: FishStore, api: FishApi): Promise<string[]> {
+  let labels: string[]
+  try {
+    labels = await api.list()
+  } catch {
+    return []
+  }
+  const restored: string[] = []
+  for (const label of labels) {
+    try {
+      store.set(label, await api.get(label))
+    } catch {
+      continue // gone between the list and the fetch
+    }
+    try {
+      store.setIds(label, await api.scmIds(label))
+      restored.push(label)
+    } catch {
+      // The set is on the server but we could not take ownership of it, so it
+      // would be unrecoverable later. Drop it while we can still say why.
+      store.drop(label)
+      store.report(
+        `Marker set "${label}" could not be fully restored and was removed. ` +
+          `Re-import its SCM-ID file to use it again.`,
+      )
+    }
+  }
+  return restored
 }

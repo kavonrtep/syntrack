@@ -35,8 +35,13 @@ MAX_FISH_SETS = 64
 MAX_FISH_SESSIONS = 32
 """Concurrent sessions (secondary guard)."""
 
-FISH_SESSION_TTL_S = 12 * 3600
-"""Sessions idle longer than this are dropped on the next store operation."""
+FISH_SESSION_TTL_S = 7 * 24 * 3600
+"""Sessions idle longer than this are dropped on the next store operation.
+
+Deliberately long: memory is bounded by ``MAX_FISH_BYTES`` already, so the TTL
+only sheds abandoned sessions. A short TTL expires the session under a tab
+that is still open — the user returns the next morning, and their sets are
+gone — which is a worse failure than holding a few megabytes longer."""
 
 
 @dataclass(slots=True)

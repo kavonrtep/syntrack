@@ -4,7 +4,9 @@ import { ApiError } from './api/client'
 import type { FishDensityResponse, FishSetResponse } from './api/types'
 import {
   createFishSet,
+  FishSetLostError,
   fishDensityRecovering,
+  hydrateFishSets,
   recreateFishSet,
   withFishRetry,
   type FishApi,
@@ -42,6 +44,7 @@ function makeStore(initial: Record<string, string[]> = {}) {
     get: (l) => sets.get(l),
     set: (l, r) => void sets.set(l, r),
     ids: (l) => ids.get(l),
+    setIds: (l, v) => void ids.set(l, v),
     drop: (l) => {
       sets.delete(l)
       ids.delete(l)
@@ -60,6 +63,9 @@ beforeEach(() => {
   api = {
     create: vi.fn(async (_ids, label) => resp(label)),
     density: vi.fn(async (_bins, labels) => density(labels)),
+    list: vi.fn(async () => []),
+    get: vi.fn(async (label) => resp(label)),
+    scmIds: vi.fn(async () => ['OG01']),
   }
 })
 
@@ -111,12 +117,15 @@ describe('withFishRetry', () => {
     expect(api.create).not.toHaveBeenCalled()
   })
 
-  it('rethrows when the set cannot be restored, without a second attempt', async () => {
+  it('reports the real reason, not the stale 404, when the set cannot be restored', async () => {
     const { store } = makeStore() // no IDs kept
     const op = vi.fn(async () => {
       throw notFound()
     })
-    await expect(withFishRetry('gone', store, api, op)).rejects.toThrow(/404/)
+    const err = await withFishRetry('gone', store, api, op).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(FishSetLostError)
+    expect((err as Error).message).toMatch(/no longer on the server/)
+    expect((err as Error).message).toMatch(/Re-import/)
     expect(op).toHaveBeenCalledTimes(1)
   })
 
@@ -178,5 +187,57 @@ describe('fishDensityRecovering', () => {
     expect(sets.has('ghost')).toBe(false)
     expect(reports[0]).toMatch(/no longer on the server/)
     expect(api.density).toHaveBeenCalledTimes(1) // no pointless retry
+  })
+})
+
+describe('hydrateFishSets', () => {
+  it('restores each set together with the SCM IDs needed to re-assert it', async () => {
+    const { store, sets, ids } = makeStore()
+    api.list = vi.fn(async () => ['s1', 's2'])
+    api.scmIds = vi.fn(async (label: string) => [`${label}-OG01`])
+    expect(await hydrateFishSets(store, api)).toEqual(['s1', 's2'])
+    expect([...sets.keys()]).toEqual(['s1', 's2'])
+    expect(ids.get('s1')).toEqual(['s1-OG01'])
+  })
+
+  it('a hydrated set is then self-healing (the v0.5.0 gap)', async () => {
+    const { store } = makeStore()
+    api.list = vi.fn(async () => ['s1'])
+    await hydrateFishSets(store, api)
+    // Server loses the set; the next operation must recover rather than fail.
+    const op = vi.fn()
+    op.mockRejectedValueOnce(notFound()).mockResolvedValueOnce('ok')
+    expect(await withFishRetry('s1', store, api, op)).toBe('ok')
+  })
+
+  it('drops a set whose IDs cannot be fetched instead of leaving a dead entry', async () => {
+    const { store, sets, reports } = makeStore()
+    api.list = vi.fn(async () => ['s1'])
+    api.scmIds = vi.fn(async () => {
+      throw notFound()
+    })
+    expect(await hydrateFishSets(store, api)).toEqual([])
+    expect(sets.has('s1')).toBe(false)
+    expect(reports[0]).toMatch(/could not be fully restored/)
+  })
+
+  it('skips a set that vanishes between the list and the fetch', async () => {
+    const { store, sets } = makeStore()
+    api.list = vi.fn(async () => ['gone', 'ok'])
+    api.get = vi.fn(async (label: string) => {
+      if (label === 'gone') throw notFound()
+      return resp(label)
+    })
+    expect(await hydrateFishSets(store, api)).toEqual(['ok'])
+    expect(sets.has('gone')).toBe(false)
+  })
+
+  it('treats an unreachable server as an empty sidebar, not an error', async () => {
+    const { store, reports } = makeStore()
+    api.list = vi.fn(async () => {
+      throw new ApiError(500, '/fish', 'down', 'Server Error')
+    })
+    expect(await hydrateFishSets(store, api)).toEqual([])
+    expect(reports).toEqual([])
   })
 })

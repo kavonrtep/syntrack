@@ -122,8 +122,9 @@ bytes:
   secondary guard, and the per-session pool removes the cross-session
   eviction thrash that the global pool had.
 - `MAX_FISH_SESSIONS = 32`, evicting oldest `last_seen` first.
-- `FISH_SESSION_TTL = 12 h` — sessions idle longer are dropped on the next
-  request.
+- `FISH_SESSION_TTL = 7 days` — sessions idle longer are dropped on the next
+  request. Long on purpose: bytes are the real bound, and a short TTL expires
+  a session under a tab that is still open (sets gone the next morning).
 
 ## 5. Failure modes
 
@@ -131,7 +132,7 @@ bytes:
 |---|---|
 | Header absent (old client, curl) | `default` namespace — today's global behaviour, so no client is broken by the upgrade |
 | Header present, session unknown | Treated as new and empty. The client re-asserts its sets (Stage 1 path) |
-| Session evicted (TTL, byte cap) | Same as unknown: transparent re-assertion, one extra round trip |
+| Session evicted (TTL, byte cap) | Same as unknown: transparent re-assertion, one extra round trip — the client holds the SCM IDs of every set, including ones restored by hydration |
 | Label collision within a session | Unchanged: 409 unless `replace: true` |
 | Label used by *another* session | No longer visible; no collision, no takeover |
 | Two tabs, same browser | Same session, same sets (`localStorage`) |
@@ -174,12 +175,17 @@ Implemented in `syntrack/api/fish_store.py` (`FishStore`, `FishSession`),
 - **`413` for an oversize set**, as in §5, and additionally: when the caller's
   own session is the only one left, its oldest sets are shed before the request
   is refused. §4 only described evicting *other* sessions.
-- **A hydrated set carries no SCM IDs**, so it cannot be self-healed after a
-  later restart: the next operation on it drops it from the sidebar and
-  reports why (the Stage 1 recovery path). Persisting IDs in `localStorage`
-  would fix that, but a 100k-SCM set is ~2 MB of ID strings against a ~5 MB
-  quota, so it was not done. Failure of hydration *itself* is silent — an
-  empty sidebar is the pre-hydration behaviour, not an error.
+- **Hydration also backfills each set's SCM IDs** (`GET /api/fish/{label}/scms`,
+  in the background after the first render), so a restored set is as
+  self-healing as one created in the page. The first cut skipped this, and a
+  restored set then died on its first use after a restart — reported from the
+  field and fixed. A set whose IDs cannot be fetched is dropped during
+  hydration, while the reason can still be given, rather than left to fail
+  later. Failure of hydration *itself* is silent — an empty sidebar is the
+  pre-hydration behaviour, not an error.
+- **A set that still cannot be restored raises `FishSetLostError`**, whose
+  message names the set and says to re-import its SCM-ID file, instead of the
+  stale `404` that triggered the recovery attempt.
 - **Visibility is not restored.** Hydrated sets appear unticked, because which
   sets were visible is browser state the server never saw.
 
