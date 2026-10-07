@@ -16,7 +16,7 @@ identifiers for probe design.
 
 ## Status
 
-v0.5.2. Phases 1-4 of the design are implemented: the viewer, region
+v0.5.3. Phases 1-4 of the design are implemented: the viewer, region
 highlighting, FISH marker sets, the disk-backed pair cache with `syntrack
 precompute`, and container distribution. Marker sets are private to the browser
 session that created them, so one server can be shared by several users.
@@ -65,7 +65,7 @@ docker compose up
 # open http://localhost:8765
 
 # HPC (Apptainer) — substitute the release you want
-VERSION=v0.5.2
+VERSION=v0.5.3
 wget https://github.com/kavonrtep/syntrack/releases/download/$VERSION/syntrack-$VERSION.sif
 apptainer run --bind /path/to/data:/path/to/data:ro \
   --env SYNTRACK_CONFIG=$PWD/syntrack_config.yaml \
