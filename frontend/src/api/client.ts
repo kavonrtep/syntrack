@@ -4,6 +4,7 @@ import type {
   AlignmentResponse,
   BlocksResponse,
   ConfigResponse,
+  FishClearResponse,
   FishDensityResponse,
   FishListResponse,
   FishSetResponse,
@@ -167,6 +168,9 @@ export const api = {
     }),
 
   fishList: () => request<FishListResponse>('/fish'),
+
+  /** Drop every set this session holds on the server. */
+  fishClear: () => request<FishClearResponse>('/fish', {}, { method: 'DELETE' }),
 
   /** One stored set with its positions — used to rebuild the sidebar on load. */
   fishGet: (label: string) =>

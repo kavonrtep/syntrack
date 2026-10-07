@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from './client'
-import { SESSION_HEADER, resetSessionIdCache, sessionId } from './session'
+import { SESSION_HEADER, newSessionId, resetSessionIdCache, sessionId } from './session'
 
 /** Captured fetch calls, so we can assert on what actually goes on the wire. */
 let calls: { url: string; init: RequestInit }[]
@@ -91,5 +91,25 @@ describe('highlight export request', () => {
   it('omits limit when the caller does not ask for one', async () => {
     await api.highlight('g1', 'chr1:0-1000')
     expect(new URL(calls[0].url).searchParams.has('limit')).toBe(false)
+  })
+})
+
+describe('clearing a session', () => {
+  it('sends DELETE /fish under the current session', async () => {
+    const id = sessionId()
+    await api.fishClear()
+    expect(calls[0].init.method).toBe('DELETE')
+    expect(new URL(calls[0].url).pathname).toBe('/api/fish')
+    expect(headersOf(calls[0].init)[SESSION_HEADER]).toBe(id)
+  })
+
+  it('a request after newSessionId carries the new key', async () => {
+    const before = sessionId()
+    await api.fishClear()
+    const after = newSessionId()
+    await api.fishList()
+    expect(headersOf(calls[0].init)[SESSION_HEADER]).toBe(before)
+    expect(headersOf(calls[1].init)[SESSION_HEADER]).toBe(after)
+    expect(after).not.toBe(before)
   })
 })

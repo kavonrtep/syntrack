@@ -42,6 +42,7 @@ session that created them, so one server can be shared by several users.
 | Save one set's SCM IDs | ↓ on that set's row (complete set, not the on-screen cap) |
 | FISH density preview | FISH preview — whole-genome signal per set; Export PNG writes a high-resolution image |
 | Marker-set budget in use | shown in the status bar while sets are loaded |
+| Start over | New session, in the Marker sets panel — click twice; deletes this browser's sets from the server and resets highlight, colours and zoom |
 
 ## Run in a container (recommended for end users)
 
@@ -77,6 +78,14 @@ Marker sets are held in the server process and namespaced per browser, so two
 people using the same instance do not see or overwrite each other's sets. The
 set a browser uploads is restored when its page reloads. Sets do not survive a
 server restart; re-import the SCM-ID file to recreate one.
+
+A session outlives the browser window: its identifier is kept in
+`localStorage`, so closing the browser and returning later restores the same
+sets, and a cache-bypassing reload (Ctrl-Shift-R) does not clear them. Restored
+sets appear one at a time as each is fetched. To start clean, use **New
+session** in the Marker sets panel: it deletes this browser's sets from the
+server and takes a fresh session identifier, so nothing reappears. It affects
+only the browser it is clicked in.
 
 Set storage is bounded (128 MB of marker indices across all sessions). The
 status bar shows the share in use. Logs name every stored and dropped set; set

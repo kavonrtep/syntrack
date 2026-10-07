@@ -196,6 +196,9 @@ export type FishUsage = {
 
 export type FishListResponse = { sets: FishSetSummary[]; usage: FishUsage }
 
+/** Result of DELETE /api/fish — how many sets the server dropped. */
+export type FishClearResponse = { cleared: number; usage: FishUsage }
+
 export type FishDensitySet = {
   label: string
   color: string

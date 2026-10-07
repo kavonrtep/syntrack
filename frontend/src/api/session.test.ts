@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { SESSION_HEADER, resetSessionIdCache, sessionHeaders, sessionId } from './session'
+import {
+  SESSION_HEADER,
+  newSessionId,
+  resetSessionIdCache,
+  sessionHeaders,
+  sessionId,
+} from './session'
 
 const KEY = 'syntrack.session_id'
 
@@ -57,5 +63,30 @@ describe('sessionId', () => {
 describe('sessionHeaders', () => {
   it('sends the ID under the agreed header name', () => {
     expect(sessionHeaders()).toEqual({ [SESSION_HEADER]: sessionId() })
+  })
+})
+
+describe('newSessionId', () => {
+  it('replaces the stored ID so later requests land in an empty namespace', () => {
+    const before = sessionId()
+    const after = newSessionId()
+    expect(after).not.toBe(before)
+    expect(window.localStorage.getItem(KEY)).toBe(after)
+    expect(sessionId()).toBe(after)
+  })
+
+  it('survives a reload, like any other session ID', () => {
+    const fresh = newSessionId()
+    resetSessionIdCache()
+    expect(sessionId()).toBe(fresh)
+  })
+
+  it('still yields a usable ID when storage is blocked', () => {
+    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('blocked')
+    })
+    const fresh = newSessionId()
+    expect(fresh).toBeTruthy()
+    expect(sessionHeaders()[SESSION_HEADER]).toBe(fresh)
   })
 })

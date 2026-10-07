@@ -378,3 +378,56 @@ def test_warns_once_the_shared_budget_is_half_used(
     with caplog.at_level("WARNING", logger="syntrack.fish"):
         _create(client, "s", ["OG01", "OG02", "OG03"], A_HDR)
     assert any("budget" in r.message and "used" in r.message for r in caplog.records)
+
+
+# --------------------------- clearing a session -----------------------------
+
+
+def test_clear_drops_every_set_in_the_session(client: TestClient) -> None:
+    _create(client, "s1", ["OG01"], A_HDR)
+    _create(client, "s2", ["OG02"], A_HDR)
+    resp = client.delete("/api/fish", headers=A_HDR)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cleared"] == 2
+    assert body["usage"]["session_sets"] == 0
+    assert body["usage"]["session_bytes"] == 0
+    assert client.get("/api/fish", headers=A_HDR).json()["sets"] == []
+
+
+def test_clear_leaves_other_sessions_alone(client: TestClient) -> None:
+    _create(client, "mine", ["OG01"], A_HDR)
+    _create(client, "theirs", ["OG02"], B_HDR)
+    assert client.delete("/api/fish", headers=A_HDR).json()["cleared"] == 1
+    labels = [s["label"] for s in client.get("/api/fish", headers=B_HDR).json()["sets"]]
+    assert labels == ["theirs"]
+
+
+def test_clear_an_empty_session_is_not_an_error(client: TestClient) -> None:
+    resp = client.delete("/api/fish", headers=A_HDR)
+    assert resp.status_code == 200
+    assert resp.json()["cleared"] == 0
+
+
+def test_clear_frees_the_shared_budget(client: TestClient, app_state: AppState) -> None:
+    _create(client, "s1", ["OG01", "OG02", "OG03"], A_HDR)
+    _create(client, "s2", ["OG04"], B_HDR)
+    before = app_state.fish.total_bytes()
+    client.delete("/api/fish", headers=A_HDR)
+    assert app_state.fish.total_bytes() == before - 12  # 3 x int32
+    assert app_state.fish.session_keys() == ["session-b"]
+
+
+def test_clear_explains_a_later_miss(client: TestClient) -> None:
+    """A set asked for after a clear should say so, not read as 'never held'."""
+    _create(client, "s1", ["OG01"], A_HDR)
+    client.delete("/api/fish", headers=A_HDR)
+    detail = client.get("/api/fish/s1/scms", headers=A_HDR).json()["detail"]
+    assert "session cleared by user" in detail
+
+
+def test_clear_is_logged(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    _create(client, "s1", ["OG01"], A_HDR)
+    with caplog.at_level("INFO", logger="syntrack.fish"):
+        client.delete("/api/fish", headers=A_HDR)
+    assert any("cleared session" in r.message and "1 sets" in r.message for r in caplog.records)

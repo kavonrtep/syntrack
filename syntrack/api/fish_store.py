@@ -364,6 +364,31 @@ class FishStore:
             session.last_seen = now
             return list(session.sets.values())
 
+    def clear(self, session_key: str) -> int:
+        """Drop every set in a session and the session itself.
+
+        Backs the "new session" action: a user starting over frees the server's
+        copy of their sets in one call, rather than one DELETE per set.
+        Returns how many sets were dropped.
+        """
+        now = time.monotonic()
+        with self._lock:
+            self._expire(now)
+            session = self._sessions.pop(session_key, None)
+            if session is None:
+                return 0
+            for label in list(session.sets):
+                self._record_removal(session_key, label, "session cleared by user", now)
+            count = len(session.sets)
+            logger.info(
+                "fish: cleared session sid=%s (%d sets, freed %dB, sessions=%d)",
+                short_sid(session_key),
+                count,
+                session.nbytes,
+                len(self._sessions),
+            )
+            return count
+
     def delete(self, session_key: str, label: str) -> bool:
         """Remove one set. False when this session does not hold that label."""
         now = time.monotonic()

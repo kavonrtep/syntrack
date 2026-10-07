@@ -11,14 +11,16 @@ When design and plan conflict, the design wins; the plan is updated.
 
 ## Status
 
-**v0.3.0 shipped.** 231 backend tests + 47 frontend tests pass; ruff/mypy --strict/svelte-check all clean; end-to-end verified on the real pea dataset (`example_data/`).
+**v0.5.2 shipped.** Full backend suite + frontend unit tests pass; ruff/mypy --strict/svelte-check all clean; end-to-end verified on the real pea dataset (`example_data/`). Licensed GPL-3.0-or-later.
 
-Shipped across v0.1–v0.3:
+Shipped across v0.1–v0.5:
 - Viewer: tracks + block ribbons + SCM-line LOD, cursor-pinned wheel zoom, drag pan, drag-and-drop reorder, sidebar visibility.
 - Phase 3: cross-genome highlight (Ctrl-drag), in-silico FISH marker sets, alignment.
 - Phase 4: `syntrack precompute` + on-disk `.npz` pair cache (`data.cache_dir`); complete (uncapped) SCM-ID export.
 - Multi-colour FISH density preview (frozen whole-genome render) + high-res PNG export + "save highlight as set".
 - Perf: vectorized block detection, int32 local coordinates, backend timing instrumentation (Server-Timing header + `SYNTRACK_LOG_LEVEL=DEBUG`), opt-in OffscreenCanvas worker for the connection layer (`?ribbonWorker=1`; default is main-thread).
+- v0.4: typed region input for the reference genome; the genome is part of a region-derived marker set's name.
+- v0.5: marker sets namespaced per browser session (`X-SynTrack-Session`, see `docs/design/FISH_SESSION_SCOPE.md`) because one process serves several users; the client owns its sets (keeps their SCM IDs and re-asserts them) and rebuilds the sidebar from the server on load; byte-bounded set storage with a status-bar budget; `syntrack.fish` lifecycle logging and self-diagnosing 404s.
 
 ## Stack (per IMPLEMENTATION_PLAN §0)
 

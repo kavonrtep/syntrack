@@ -304,6 +304,13 @@ class FishUsageSchema(_Schema):
     sessions: int
 
 
+class FishClearResponse(_Schema):
+    """Result of dropping a session's sets (the "new session" action)."""
+
+    cleared: int
+    usage: FishUsageSchema
+
+
 class FishListResponse(_Schema):
     sets: list[FishSetSchema]
     usage: FishUsageSchema

@@ -29,6 +29,7 @@ from syntrack.api.fish_store import (
 )
 from syntrack.api.sampling import subsample_indices
 from syntrack.api.schemas import (
+    FishClearResponse,
     FishDensityRequest,
     FishDensityResponse,
     FishDensitySet,
@@ -224,6 +225,18 @@ def delete_fish_set(
 ) -> None:
     if not state.fish.delete(session, label):
         raise _not_found(state, session, label, "delete")
+
+
+@router.delete("/fish", status_code=200, response_model=FishClearResponse)
+def clear_fish_sets(
+    state: AppState = Depends(get_state),
+    session: str = Depends(get_session),
+) -> FishClearResponse:
+    """Drop all of this session's sets. Backs the "new session" action, which
+    then switches the browser to a fresh session key. Other sessions are
+    untouched; clearing a session that holds nothing is not an error."""
+    cleared = state.fish.clear(session)
+    return FishClearResponse(cleared=cleared, usage=_usage_schema(state.fish.usage(session)))
 
 
 @router.post("/fish/density", response_model=FishDensityResponse)

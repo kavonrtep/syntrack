@@ -61,6 +61,7 @@ Endpoint contracts are unchanged. What changes is which store they see:
 | Endpoint | Before | After |
 |---|---|---|
 | `POST /api/fish` | one global dict | this session's dict |
+| `DELETE /api/fish` | (did not exist) | drops this session's sets in one call |
 | `GET /api/fish` | every set on the server | this session's sets |
 | `DELETE /api/fish/{label}` | any set | this session's set only (404 otherwise) |
 | `POST /api/fish/density` | any label | this session's labels |
@@ -74,6 +75,12 @@ Consequences worth stating explicitly:
   re-assertion churn.
 - Sets are no longer shared between users. Sharing happens by exchanging the
   exported SCM-ID file, which already round-trips (`↓ SCM IDs` → file import).
+- A session outlives the browser window (the ID is in `localStorage`), so sets
+  reappear on the next visit. That is the point, but it needs an escape hatch:
+  the "New session" action calls `DELETE /api/fish` and then mints a new ID, so
+  the server's copy is freed before the browser stops being able to address it.
+  Users reported the reappearance as a suspected bug, which is why the action
+  exists and why the README states the lifetime explicitly.
 
 ## 3. Non-goals
 

@@ -3,6 +3,7 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
   import { api } from './api/client'
+  import { newSessionId } from './api/session'
   import type {
     BlocksResponse,
     ConfigResponse,
@@ -1345,6 +1346,53 @@
 
   // ----------------------------- Status helpers --------------------------
 
+  // Two-step confirmation for "New session": the first click arms it, a second
+  // within the window commits. Avoids a modal, and avoids wiping a user's work
+  // on one stray click.
+  let newSessionArmed = $state(false)
+  let newSessionBusy = $state(false)
+  let armTimer: ReturnType<typeof setTimeout> | undefined
+  const ARM_WINDOW_MS = 5000
+
+  /** Clear this browser's marker sets and switch to a fresh session.
+   *
+   *  Sets are restored from the server on every load (the session ID lives in
+   *  localStorage, so closing the browser does not end the session). This is
+   *  the way to start clean: the server's copy is dropped first, then the
+   *  browser takes a new session key, so nothing reappears. */
+  async function startNewSession(): Promise<void> {
+    if (!newSessionArmed) {
+      newSessionArmed = true
+      clearTimeout(armTimer)
+      armTimer = setTimeout(() => (newSessionArmed = false), ARM_WINDOW_MS)
+      return
+    }
+    clearTimeout(armTimer)
+    newSessionArmed = false
+    newSessionBusy = true
+    error = null
+    try {
+      // Free the server's copy while we still own the old session key.
+      await api.fishClear()
+    } catch (err) {
+      // Report, then carry on: the new key makes the old sets unreachable
+      // anyway, and they age out of the server on their own.
+      error = `Server-side sets may not have been freed: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    } finally {
+      newSessionId()
+      for (const label of [...fishSets.keys()]) fishStore.drop(label)
+      fishUsage = null
+      fishPreview = false
+      fishDensityResult = null
+      fishDensityError = null
+      resetSeqColors()
+      resetView()
+      newSessionBusy = false
+    }
+  }
+
   /** Full name plus size, for the sidebar tooltip. Set names are long (a
    *  region plus its genome) and the row truncates them with an ellipsis, so
    *  hovering is the only way to read one in full. */
@@ -1563,6 +1611,17 @@
             <button onclick={() => fishFileInput?.click()} disabled={fishLoading}>
               {fishLoading ? 'Loading…' : 'Load'}
             </button>
+            <button
+              class="new-session"
+              class:armed={newSessionArmed}
+              disabled={newSessionBusy}
+              title="Start a new session: delete this browser's marker sets from the server, drop the highlight, chromosome colours and zoom, and take a fresh session key. Marker sets are otherwise restored every time this page loads. Other users are unaffected."
+              onclick={startNewSession}
+            >
+              {#if newSessionBusy}Clearing…
+              {:else if newSessionArmed}Click again to clear
+              {:else}New session{/if}
+            </button>
           {/if}
         </div>
         <input
@@ -1739,6 +1798,12 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .new-session.armed {
+    background: #7a2d2d;
+    border-color: #a04040;
+    color: #fff;
   }
 
   .fade-ctl {

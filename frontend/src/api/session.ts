@@ -54,3 +54,18 @@ export function sessionHeaders(): Record<string, string> {
 export function resetSessionIdCache(): void {
   cached = null
 }
+
+/** Start a new session: mint a fresh ID and persist it, so subsequent requests
+ *  land in an empty namespace. The caller is responsible for clearing the
+ *  server's copy of the old session first (DELETE /api/fish) and for clearing
+ *  local state — this only changes identity. Returns the new ID. */
+export function newSessionId(): string {
+  const fresh = newId()
+  cached = fresh
+  try {
+    window.localStorage.setItem(STORAGE_KEY, fresh)
+  } catch {
+    // Storage blocked — the ID still holds for this page load.
+  }
+  return fresh
+}
